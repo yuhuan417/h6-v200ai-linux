@@ -1,0 +1,12 @@
+[Unit]
+Description=V200-AI load Bluetooth after WiFi AP is up
+After=v200ai-ap.service
+Requires=v200ai-ap.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/v200ai-bt-late.sh
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

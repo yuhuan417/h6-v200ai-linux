@@ -1,0 +1,19 @@
+[Unit]
+Description=V200-AI USB composite gadget (ACM serial + NCM network)
+# 必须在 simple network / systemd-modules-load 之后，getty 之前不需要特殊顺序
+After=systemd-modules-load.service local-fs.target
+# 注意：不要写 Before=serial-getty@ttyGS0.service
+# 脚本内部会 systemctl restart 它，若本服务又排它之前 ⇒ 自锁到 TimeoutStartSec
+Wants=network-pre.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+Environment=NETFUNC=ncm
+ExecStart=/usr/local/bin/usbgadget.sh
+# 失败也不影响启动（会退回 initramfs 的 g_serial）
+SuccessExitStatus=0 1
+TimeoutStartSec=60
+
+[Install]
+WantedBy=multi-user.target

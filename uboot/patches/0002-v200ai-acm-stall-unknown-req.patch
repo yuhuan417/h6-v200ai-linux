@@ -1,0 +1,16 @@
+--- a/drivers/usb/gadget/f_acm.c
++++ b/drivers/usb/gadget/f_acm.c
+@@ -438,6 +438,13 @@
+ 		printf("invalid control req%02x.%02x v%04x i%04x l%d\n",
+ 		       ctrl->bRequestType, ctrl->bRequest, w_value, w_index,
+ 		       w_length);
++		/*
++		 * V200-AI 修正：对未识别的 CDC class 请求必须返回负值，
++		 * composite_setup() 才会对 ep0 发 STALL。原先这里落到 return 0，
++		 * 上层误认为"已处理"，既不回响应也不 STALL，主机侧控制传输悬空
++		 * -> Windows usbser 打开端口时报"设备没有发挥作用"(Code 10)。
++		 */
++		return -EOPNOTSUPP;
+ 	}
+ 
+ 	/* respond with data transfer or status phase? */

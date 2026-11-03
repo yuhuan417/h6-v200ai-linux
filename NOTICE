@@ -1,0 +1,20 @@
+This repository records a working Allwinner H6 / BCM4335 Linux configuration.
+
+Linux driver sources: Linux stable v6.1.190, https://github.com/gregkh/linux
+Retain the original copyright notices and SPDX license identifiers in each file.
+The Bluetooth and H6 IOMMU sources include the local adaptations documented in docs/drivers.md.
+The USB3 PHY source is from the Linux 6.1 family; its board-tested source is preserved as supplied.
+
+U-Boot patches: upstream commit 03e45557e1f38a39a0c80fe30483130ff376cf92,
+https://github.com/u-boot/u-boot; covered by the licenses of the affected upstream files.
+Trusted Firmware-A reference: da5a281eeb92cce4a3403f1d28c53672537d4e99,
+https://github.com/ARM-software/arm-trusted-firmware.
+
+Project maintenance scripts and documentation: GPL-2.0-or-later.
+The license of each upstream-derived file takes precedence over this project default.
+The GPL version 2 text is supplied in LICENSE.
+
+Firmware binaries are not included. Their source locations and expected hashes are
+documented in firmware/README.md. They remain subject to the supplier's terms.
+firmware/brcmfmac4335-sdio.txt preserves the tested board configuration; it does not
+claim independent RF calibration or regulatory certification for another board.

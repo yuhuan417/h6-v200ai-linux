@@ -1,0 +1,15 @@
+[Unit]
+Description=V200-AI WiFi AP (fallback to STA)
+After=systemd-networkd.service
+Wants=systemd-networkd.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/v200ai-wifi-boot.sh
+ExecStop=/usr/local/bin/v200ai-wifi-stop.sh
+RemainAfterExit=yes
+TimeoutStartSec=240
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target

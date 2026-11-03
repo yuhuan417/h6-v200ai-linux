@@ -1,0 +1,66 @@
+#!/bin/sh
+# V200-AI eMMC boot. Recovery: p1/noswitch -> USB serial initramfs shell.
+# Keep the proven klibc chroot handoff; no installer or raw-sector log writes.
+export PATH=/sbin:/usr/sbin:/bin:/usr/bin
+mkdir -p /proc /sys /dev /mnt /tmp /rootfs
+mount -t proc proc /proc
+mount -t sysfs sysfs /sys
+mount -t devtmpfs devtmpfs /dev
+mkdir -p /dev/pts
+mount -t devpts devpts /dev/pts 2>/dev/null
+mark() { echo "<6>v200ai: $*" > /dev/kmsg; }
+wait_node() {
+    node=$1; i=0
+    while [ ! -e "$node" ] && [ "$i" -lt 100 ]; do
+        sleep 0.1; i=$((i+1))
+    done
+    [ -e "$node" ]
+}
+mark "initramfs start"
+modprobe fixed
+modprobe leds-gpio 2>/dev/null
+modprobe sunxi-mmc
+# These are needed for the recovery shell and the subsequent ACM+NCM gadget.
+modprobe phy-sun4i-usb
+modprobe musb_hdrc
+modprobe sunxi
+modprobe libcomposite
+modprobe u_serial
+modprobe g_serial
+wait_node /dev/ttyGS0 || mark "USB serial not ready"
+modprobe nls_cp437
+modprobe nls_iso8859-1
+modprobe nls_utf8
+modprobe fat
+modprobe vfat
+M=/lib/modules/6.1.0-54-arm64/kernel
+insmod $M/crypto/crc32_generic.ko
+insmod $M/crypto/crc32c_generic.ko
+insmod $M/lib/libcrc32c.ko
+insmod $M/lib/crc16.ko
+insmod $M/fs/mbcache.ko
+insmod $M/fs/jbd2/jbd2.ko
+insmod $M/fs/ext4/ext4.ko
+mounted=""
+if wait_node /dev/mmcblk1p1 && mount -t vfat -o ro /dev/mmcblk1p1 /mnt; then
+    mounted=yes
+fi
+if [ -n "$mounted" ] && [ ! -f /mnt/noswitch ]; then
+    if wait_node /dev/mmcblk1p3 && mount -t ext4 -o rw /dev/mmcblk1p3 /rootfs; then
+        if chroot /rootfs /bin/sh -c 'exit 0'; then
+            umount /mnt
+            mount -o move /dev /rootfs/dev
+            mount -o move /proc /rootfs/proc
+            mount -o move /sys /rootfs/sys
+            [ -c /rootfs/dev/console ] || mknod /rootfs/dev/console c 5 1
+            echo "<6>v200ai: exec Debian init" > /rootfs/dev/kmsg
+            exec chroot /rootfs /sbin/init
+        fi
+    fi
+fi
+mark "recovery shell (noswitch or root mount failure)"
+if [ -c /dev/ttyGS0 ]; then
+    exec /bin/sh -i </dev/ttyGS0 >/dev/ttyGS0 2>&1
+fi
+# Do not return from PID 1 or reboot without the user's action.
+while :; do sleep 1; done

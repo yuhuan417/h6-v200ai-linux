@@ -1,0 +1,417 @@
+diff --git a/Makefile b/Makefile
+index 840d02aa..abb40023 100644
+--- a/Makefile
++++ b/Makefile
+@@ -2343,13 +2343,13 @@ define filechk_timestamp.h
+ 		SOURCE_DATE="@$${SOURCE_DATE_EPOCH}"; \
+ 		DATE=""; \
+ 		for date in gdate date.gnu date; do \
+-			$${date} -u -d "$${SOURCE_DATE}" >/dev/null 2>&1 && DATE="$${date}"; \
++			$${date} -d "$${SOURCE_DATE}" >/dev/null 2>&1 && DATE="$${date}"; \
+ 		done; \
+ 		if test -n "$${DATE}"; then \
+-			LC_ALL=C $${DATE} -u -d "$${SOURCE_DATE}" +'#define U_BOOT_DATE "%b %d %C%y"'; \
+-			LC_ALL=C $${DATE} -u -d "$${SOURCE_DATE}" +'#define U_BOOT_TIME "%T"'; \
+-			LC_ALL=C $${DATE} -u -d "$${SOURCE_DATE}" +'#define U_BOOT_TZ "%z"'; \
+-			LC_ALL=C $${DATE} -u -d "$${SOURCE_DATE}" +'#define U_BOOT_EPOCH %s'; \
++			LC_ALL=C $${DATE} -d "$${SOURCE_DATE}" +'#define U_BOOT_DATE "%b %d %C%y"'; \
++			LC_ALL=C $${DATE} -d "$${SOURCE_DATE}" +'#define U_BOOT_TIME "%T"'; \
++			LC_ALL=C $${DATE} -d "$${SOURCE_DATE}" +'#define U_BOOT_TZ "%z"'; \
++			LC_ALL=C $${DATE} -d "$${SOURCE_DATE}" +'#define U_BOOT_EPOCH %s'; \
+ 		else \
+ 			return 42; \
+ 		fi; \
+diff --git a/arch/arm/dts/sun50i-h6-orangepi-3.dts b/arch/arm/dts/sun50i-h6-orangepi-3.dts
+index 007e74e9..a3a92d4c 100644
+--- a/arch/arm/dts/sun50i-h6-orangepi-3.dts
++++ b/arch/arm/dts/sun50i-h6-orangepi-3.dts
+@@ -154,6 +154,7 @@
+ };
+ 
+ &mmc2 {
++	bootph-pre-ram;			/* 让 SPL 也编进 eMMC 驱动 */
+ 	vmmc-supply = <&reg_cldo1>;
+ 	vqmmc-supply = <&reg_bldo2>;
+ 	cap-mmc-hw-reset;
+@@ -325,12 +326,8 @@
+ };
+ 
+ &usb2otg {
+-	/*
+-	 * This board doesn't have a controllable VBUS even though it
+-	 * does have an ID pin. Using it as anything but a USB host is
+-	 * unsafe.
+-	 */
+-	dr_mode = "host";
++	/* 改成 peripheral：让 OTG 口作为 USB 设备端，供 ums / fastboot 使用 */
++	dr_mode = "peripheral";
+ 	status = "okay";
+ };
+ 
+diff --git a/arch/arm/dts/sun50i-h6-orangepi-one-plus.dts b/arch/arm/dts/sun50i-h6-orangepi-one-plus.dts
+index 29a081e7..934ece7c 100644
+--- a/arch/arm/dts/sun50i-h6-orangepi-one-plus.dts
++++ b/arch/arm/dts/sun50i-h6-orangepi-one-plus.dts
+@@ -41,3 +41,35 @@
+ 		reg = <1>;
+ 	};
+ };
++
++/* ---- V200-AI 适配：OTG 做外设(UMS)、启用 eMMC、关掉不存在的 SD 槽 ---- */
++&usb2otg {
++	dr_mode = "peripheral";
++	status = "okay";
++};
++
++&mmc2 {
++	bus-width = <4>;
++	non-removable;
++	no-sd;
++	no-sdio;
++	status = "okay";
++};
++
++&mmc0 {
++	status = "disabled";
++};
++
++/* V200-AI: SDIO(WiFi) 控制器先关掉，避免 SPL 读 eMMC 时误探 SDIO */
++&mmc1 {
++	status = "disabled";
++};
++
++/* SPL 里要读 eMMC，需要 CCU（时钟）和 eMMC 控制器节点进 SPL 设备树 */
++&ccu {
++	bootph-pre-ram;
++};
++
++&mmc2 {
++	bootph-pre-ram;
++};
+diff --git a/arch/arm/dts/sunxi-u-boot.dtsi b/arch/arm/dts/sunxi-u-boot.dtsi
+index e1a9a7f5..8d0ab811 100644
+--- a/arch/arm/dts/sunxi-u-boot.dtsi
++++ b/arch/arm/dts/sunxi-u-boot.dtsi
+@@ -54,7 +54,7 @@
+ 					arch = ARCH;
+ 					compression = "none";
+ 					load = <CONFIG_TEXT_BASE>;
+-#if CONFIG_SUNXI_BL31_BASE == 0
++#if 1  /* FEL boot: enter U-Boot directly at EL3 */
+ 					entry = <CONFIG_TEXT_BASE>;
+ #endif
+ 
+@@ -79,7 +79,7 @@
+ 				};
+ #endif
+ 
+-#if CONFIG_SUNXI_SCP_BASE
++#if 0  /* scp disabled: no crust firmware */
+ 				scp {
+ 					description = "SCP firmware";
+ 					type = "firmware";
+@@ -112,11 +112,7 @@
+ #else
+ 					firmware = "uboot";
+ #endif
+-#if CONFIG_SUNXI_SCP_BASE
+-					loadables = "scp", "uboot";
+-#else
+ 					loadables = "uboot";
+-#endif
+ 					fdt = "fdt-SEQ";
+ 				};
+ 			};
+diff --git a/arch/arm/mach-sunxi/Kconfig b/arch/arm/mach-sunxi/Kconfig
+index b0c5d3cd..dcdce4b1 100644
+--- a/arch/arm/mach-sunxi/Kconfig
++++ b/arch/arm/mach-sunxi/Kconfig
+@@ -1,5 +1,14 @@
+ if ARCH_SUNXI
+ 
++config H6_FEL_MMC_HOOK
++	bool "V200-AI: FEL MMC 调试钩子"
++	depends on SPL && SPL_BOARD_INIT && MMC
++	default n
++	help
++	  在 sunxi 的 spl_board_init() 里用 u-boot 自带的 sunxi_mmc 驱动直接读写 eMMC，
++	  结果写到 DRAM 固定地址后返回 FEL。仅用于 FEL 调试构建——正常启动的
++	  bootloader 必须关掉本选项，否则 SPL 会跳过真正的启动流程。
++
+ config IDENT_STRING
+ 	default " Allwinner Technology"
+ 
+diff --git a/arch/arm/mach-sunxi/board.c b/arch/arm/mach-sunxi/board.c
+index 432b1c10..a173fc2c 100644
+--- a/arch/arm/mach-sunxi/board.c
++++ b/arch/arm/mach-sunxi/board.c
+@@ -212,9 +212,201 @@ static int gpio_init(void)
+ 	return 0;
+ }
+ 
++extern ulong mmc_bread(struct blk_desc *block_dev, lbaint_t start,
++		       lbaint_t blkcnt, void *dst);
++
++
++/*
++ * SPL 早期钩子：在 boot_from_devices() 之前执行（common/spl/spl.c）。
++ * 用 u-boot 自己的 sunxi_mmc 驱动去读 eMMC，把结果写回 DRAM 后返回 FEL。
++ *
++ *   0x400ffff0 入: 0x4d524144 ('MRAD')
++ *   0x400ffff4 入: 起始块号      0x400ffff8 入: 块数 / 出: 实际读到块数
++ *   0x400ffffc 入: 目标地址
++ *   0x400fffe0 出: 设备总块数    0x400fffe4 出: 用上的 mmc 号
++ *   0x400fffc0..cc 出: mmc0..3 的 mmc_init() 返回码
++ *   0x400fffd0 出: 进度标记      0x400fffd4 出: SMHC2 STATUS
++ *   0x400fffd8 出: SMHC2 RINT
++ */
++#if IS_ENABLED(CONFIG_H6_FEL_MMC_HOOK)
++void spl_board_init(void)
++{
++	u32 sect, cnt, dst, got = 0, lba = 0, used = 0xffffffff;
++	u32 rc[4] = { 0xdeadbeef, 0xdeadbeef, 0xdeadbeef, 0xdeadbeef };
++	int i;
++
++	/* 出参：DRAM 容量（字节）。板子没有串口，容量只能这样报出来 */
++	writel((u32)gd->ram_size, (void *)0x400fff58);
++
++	/*
++	 * 无条件触发（调试构建）：DRAM 在本函数之前已初始化，
++	 * 所以一次运行就够，不必依赖"两次运行 + 魔数"。
++	 * 参数从 DRAM 读，但带合法性校验，非法则用默认值（块 0 / 1 块 / 0x40300000）。
++	 */
++	sect = readl((void *)0x400ffff4);
++	cnt = readl((void *)0x400ffff8);
++	dst = readl((void *)0x400ffffc);
++	if (cnt == 0 || cnt > 262144 || dst < 0x40200000 || dst > 0x60000000) {
++		sect = 0;
++		cnt = 1;
++		dst = 0x40300000;
++	}
++
++	/*
++	 * 'MWRT' (0x5452574d)：写 eMMC。只有主机显式写入这个魔数才会走写路径，
++	 * 平时跑的永远是只读路径。写完把结果写回 DRAM 再返回 FEL。
++	 */
++	if (readl((void *)0x400ffff0) == 0x5452574d) {
++		u32 wgot = 0;
++
++		writel(0x1000, (void *)0x400fffd0);
++		mmc_initialize(NULL);
++		writel(0x2000, (void *)0x400fffd0);
++		for (i = 0; i < 4; i++) {
++			struct mmc *mmc = find_mmc_device(i);
++			struct blk_desc *desc;
++			int e;
++
++			if (!mmc) {
++				rc[i] = 0xffffffff;
++				continue;
++			}
++			writel(0x3000 + i, (void *)0x400fffd0);
++			e = mmc_init(mmc);
++			rc[i] = (u32)e;
++			if (e)
++				continue;
++			desc = mmc_get_blk_desc(mmc);
++			if (!desc) {
++				rc[i] = 0xfffffffe;
++				continue;
++			}
++			lba = (u32)desc->lba;
++			used = i;
++			/* 写前先记录关键状态，便于定位 mmc_bwrite 的失败点 */
++			writel(mmc->read_bl_len, (void *)0x400fff60);
++			writel(mmc->write_bl_len, (void *)0x400fff64);
++			writel(mmc->part_config, (void *)0x400fff68);
++			writel(mmc->csd[1], (void *)0x400fff6c);
++			writel(mmc->csd[2], (void *)0x400fff70);
++			if (mmc->ext_csd) {
++				writel(mmc->ext_csd[171], (void *)0x400fff74);
++				writel(mmc->ext_csd[192], (void *)0x400fff78);
++				writel(mmc->ext_csd[181], (void *)0x400fff7c);
++			} else {
++				writel(0xeeeeeeee, (void *)0x400fff74);
++			}
++			/*
++			 * 单次 blk_dwrite 超过 128 块会让 sunxi_mmc 挂死，
++			 * 但整段只跑一次 SPL（不用每 64KB 重传），所以内部切块。
++			 */
++			while (wgot < cnt) {
++				u32 step = cnt - wgot;
++				u32 r;
++
++				if (step > 128)
++					step = 128;
++				r = (u32)blk_dwrite(desc, sect + wgot, step,
++					    (void *)(uintptr_t)(dst + wgot * 512));
++				if (r != step) {
++					wgot += r;
++					break;
++				}
++				wgot += step;
++			}
++			break;
++		}
++		writel(rc[0], (void *)0x400fffc0);
++		writel(rc[1], (void *)0x400fffc4);
++		writel(rc[2], (void *)0x400fffc8);
++		writel(rc[3], (void *)0x400fffcc);
++		writel(wgot, (void *)0x400ffff8);
++		writel(lba, (void *)0x400fffe0);
++		writel(used, (void *)0x400fffe4);
++		writel(0x7777, (void *)0x400fffd0);
++		return_to_fel(fel_stash.sp, fel_stash.lr);
++	}
++
++	writel(0x1000, (void *)0x400fffd0);	/* 进钩子 */
++	mmc_initialize(NULL);
++	writel(0x2000, (void *)0x400fffd0);	/* 驱动初始化完 */
++
++	for (i = 0; i < 4; i++) {
++		struct mmc *mmc = find_mmc_device(i);
++		struct blk_desc *desc;
++		int e;
++
++		if (!mmc) {
++			rc[i] = 0xffffffff;
++			continue;
++		}
++		writel(0x3000 + i, (void *)0x400fffd0);
++		e = mmc_init(mmc);
++		rc[i] = (u32)e;
++		if (e)
++			continue;		/* 失败原因留在 rc[] 里 */
++		desc = mmc_get_blk_desc(mmc);
++		if (!desc) {
++			rc[i] = 0xfffffffe;
++			continue;
++		}
++		lba = (u32)desc->lba;
++		used = i;
++
++		/* 把这张卡的身份信息全部打出来：mmc_no 就是物理控制器号 */
++		{
++			struct sunxi_mmc_priv_dbg {
++				unsigned mmc_no;
++			} *pv = (void *)mmc->priv;
++
++			writel(pv->mmc_no, (void *)0x400fff80);
++			writel(mmc->version, (void *)0x400fff84);
++			writel((u32)mmc->high_capacity, (void *)0x400fff88);
++			writel(mmc->bus_width, (void *)0x400fff8c);
++			writel(mmc->ocr, (void *)0x400fff90);
++			writel((u32)mmc->capacity, (void *)0x400fff94);
++			writel((u32)desc->devnum, (void *)0x400fff98);
++			writel((u32)desc->blksz, (void *)0x400fff9c);
++			writel(mmc->cid[0], (void *)0x400fffa0);
++			writel(mmc->cid[1], (void *)0x400fffa4);
++			writel(mmc->cid[2], (void *)0x400fffa8);
++			writel(mmc->cid[3], (void *)0x400fffac);
++			writel(mmc->csd[0], (void *)0x400fffb0);
++			writel(mmc->csd[3], (void *)0x400fffb4);
++			writel(i, (void *)0x400fffb8);
++		}
++
++		got = (u32)mmc_bread(desc, sect, cnt, (void *)(uintptr_t)dst);
++		break;
++	}
++
++	writel(rc[0], (void *)0x400fffc0);
++	writel(rc[1], (void *)0x400fffc4);
++	writel(rc[2], (void *)0x400fffc8);
++	writel(rc[3], (void *)0x400fffcc);
++	writel(got, (void *)0x400ffff8);
++	writel(lba, (void *)0x400fffe0);
++	writel(used, (void *)0x400fffe4);
++	writel(readl((void *)0x0402203c), (void *)0x400fffd4);
++	writel(readl((void *)0x04022038), (void *)0x400fffd8);
++	writel(0x9999, (void *)0x400fffd0);
++
++	return_to_fel(fel_stash.sp, fel_stash.lr);
++}
++#endif /* CONFIG_H6_FEL_MMC_HOOK */
++
+ static int spl_board_load_image(struct spl_image_info *spl_image,
+ 				struct spl_boot_device *bootdev)
+ {
++	/*
++	 * FEL 二次运行：如果 DRAM 里有约定魔数，说明主机已经把 U-Boot
++	 * 写进内存了，此时 DRAM 刚被本次初始化过，直接跳进去即可。
++	 */
++	if (readl((void *)0x400ffff0) == 0x55424f4f) {
++		((void (*)(void))(uintptr_t)CONFIG_TEXT_BASE)();
++	}
++
++
+ 	debug("Returning to FEL sp=%x, lr=%x\n", fel_stash.sp, fel_stash.lr);
+ 	return_to_fel(fel_stash.sp, fel_stash.lr);
+ 
+diff --git a/board/sunxi/board.c b/board/sunxi/board.c
+index 3d1afec7..cd23c70c 100644
+--- a/board/sunxi/board.c
++++ b/board/sunxi/board.c
+@@ -271,6 +271,8 @@ static const char *get_spl_dt_name(void)
+ 
+ int dram_init(void)
+ {
++	writel(0x22, (void *)0x40100010);
++
+ 	struct boot_file_head *spl = get_spl_header(SPL_DRAM_HEADER_VERSION);
+ 
+ 	if (spl == INVALID_SPL_HEADER)
+diff --git a/common/board_f.c b/common/board_f.c
+index 2f26b464..fe15d99b 100644
+--- a/common/board_f.c
++++ b/common/board_f.c
+@@ -1089,6 +1089,8 @@ static void initcall_run_f(void)
+ 
+ void board_init_f(ulong boot_flags)
+ {
++	writel(0x11, (void *)0x40100010);
++
+ 	struct board_f boardf;
+ 
+ 	gd->flags = boot_flags;
+diff --git a/common/board_r.c b/common/board_r.c
+index a397e209..978fe214 100644
+--- a/common/board_r.c
++++ b/common/board_r.c
+@@ -10,6 +10,7 @@
+  */
+ 
+ #include <config.h>
++#include <asm/io.h>
+ #include <api.h>
+ #include <bootstage.h>
+ #include <cpu_func.h>
+@@ -778,6 +779,8 @@ static void initcall_run_r(void)
+ 
+ void board_init_r(gd_t *new_gd, ulong dest_addr)
+ {
++	writel(0x44, (void *)0x40100010);
++
+ 	/*
+ 	 * The pre-relocation drivers may be using memory that has now gone
+ 	 * away. Mark serial as unavailable - this will fall back to the debug
+diff --git a/common/main.c b/common/main.c
+index 4b450455..599f9bee 100644
+--- a/common/main.c
++++ b/common/main.c
+@@ -7,6 +7,7 @@
+ /* #define	DEBUG	*/
+ 
+ #include <autoboot.h>
++#include <asm/io.h>
+ #include <button.h>
+ #include <bootstage.h>
+ #include <bootstd.h>
+@@ -42,6 +43,8 @@ static void run_preboot_environment_command(void)
+ /* We come here after U-Boot is initialised and ready to process commands */
+ void main_loop(void)
+ {
++	writel(0x55, (void *)0x40100010);
++
+ 	const char *s;
+ 
+ 	bootstage_mark_name(BOOTSTAGE_ID_MAIN_LOOP, "main_loop");
