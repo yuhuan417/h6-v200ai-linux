@@ -1,12 +1,17 @@
 [Unit]
-Description=V200-AI load Bluetooth after WiFi AP is up
-After=v200ai-ap.service
-Requires=v200ai-ap.service
+Description=V200-AI load Bluetooth after the WiFi driver attached, then heal WiFi
+# 次序：brcmfmac（udev 自动加载，wlan0 出现、驱动已 attach）→ 本服务下 BT 补丁
+# → 补丁会重置芯片 SDIO，本服务随即重绑 → v200ai-ap.service 再起 AP。
+# 注意：本单元**不能** Requires/After v200ai-ap（会与 ap 的 After 本单元形成环）。
+After=systemd-udevd.service systemd-networkd.service
+Before=v200ai-ap.service
 
 [Service]
 Type=oneshot
 ExecStart=/usr/local/bin/v200ai-bt-late.sh
 RemainAfterExit=yes
+# 补丁下载 5-6 s + 重绑 + 确认
+TimeoutStartSec=180
 
 [Install]
 WantedBy=multi-user.target

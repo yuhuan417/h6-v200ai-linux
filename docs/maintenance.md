@@ -14,6 +14,70 @@ WiFi 异常时保持 USB 管理通道，优先检查 dmesg、`/sys/class/net/wla
 `sdio-reset.sh` 重绑 WiFi 主控、重新触发 WL_REG_ON，能恢复部分故障但不代表物理切断所有电源。
 这两者都可能中断 WiFi。当前 `hostapd.conf` 每次由模式脚本生成，直接手改不会持久。
 
+开机首选模式由 `/etc/v200ai-wifi-mode` 决定（内容 `ap` 或 `sta`，缺失按 `ap`），
+用 `wifi-mode.sh boot-mode sta|ap` 读写；`ap`/`sta` 子命令不修改它，避免一次临时试验变成长期默认。
+`v200ai-wifi-boot.sh` 先起首选模式，失败才回退另一种，所以板子不会停在「无 WiFi」状态。
+
+AP 拆除时固件可能卡在 SDIO 控制通道（`brcmf_sdio_bus_rxctl`，dmesg 里是一串 `-110`），
+hostapd 的 SIGTERM 只能排在每条约 2.5 s 的超时之后。`do_sta` 只给 3 s 退出窗口，
+超时即直接 `sdio-reset.sh` 重绑并用 SIGKILL 收尾，不再干等约两分钟；`do_ap` 同样处理，
+保证恢复守护回滚 AP 时能走通。
+
+## 蓝牙 tether（iPhone 上行）
+
+芯片不支持 STA+AP 并发，但 **AP + 蓝牙 PAN 上行**可以共存：WiFi 只做热点，外网走 `bnep0`。
+这就是「板子当热点，同时用手机网络上网」的形态。
+
+```sh
+/usr/local/bin/bt-tether.sh          # 建 PAN、拿 DHCP、配 NAT 和 DNS；可重复执行
+wifi-mode.sh status                 # 会显示 bnep0 地址
+```
+
+- 配对：iPhone 走 numeric comparison。BlueZ 侧必须用能确认的 agent
+  （`bluetoothctl` 里 `agent DisplayYesNo` 并回 `yes`），`NoInputNoOutput` 会被取消。
+  iPhone 要在「设置 → 蓝牙」页面保持打开才对外可被发现，个人热点要打开。
+- 配置：`/etc/v200ai-bt-tether.conf` 里写 `BT_ADDR=<iPhone MAC>`。
+- 连接：板上没有 bluez-tools，用 BlueZ D-Bus 的 `org.bluez.Network1 Connect nap`；
+  `bnep0` 的 DHCP 由运行态 `/run/systemd/network/25-bnep0.network` 交给 systemd-networkd。
+- NAT：AP 模式下脚本会 `net.ipv4.ip_forward=1` 并加
+  `iptables -t nat -A POSTROUTING -s 192.168.50.0/24 -o bnep0 -j MASQUERADE`，
+  AP 客户端因此共享这条蜂窝链路。规则是运行态，重启由脚本重建。
+- DNS：本板没有 systemd-resolved，`net-dns.sh <iface>` 把该链路的 DHCP DNS
+  bind mount 到 `/etc/resolv.conf`（不写 eMMC），并让 AP 的 dnsmasq 也换上游。
+
+已知代价：
+
+- **冷启动时下载 BT 补丁会重置芯片的 SDIO/backplane**（2026-11-09 实测）：补丁最后一步
+  把 BT core 从 RAM 启动，整颗芯片的 SDIO 侧随之失效 —— WL 固件哪怕没起 AP 也会立刻
+  不再应答（`-110`），hostapd 仍报 `ENABLED`。开机顺序因此固定为：
+
+  ```
+  udev 加载 brcmfmac（wlan0 出现 = 驱动已 attach，这是重绑能恢复的前提）
+  → v200ai-bt-late：modprobe hci_uart 下补丁
+  → 探测 channel 行（1 s 超时）确认失效
+  → sdio-reset 重绑（驱动 attach 过才有效）
+  → v200ai-ap：wifi-mode.sh ap 起 hostapd
+  → v200ai-bt-tether：PAN + NAT + DNS
+  ```
+
+  实测开机到「AP + 外网齐活」**28.5 s**（各段：brcmfmac attach 6.8 s、补丁 14.6 s、
+  探测 1.4 s、重绑 3.6 s、hostapd 5.7 s、tether 3.1 s）。
+- **不要试「先 BT 后 WL/AP」**（三条都实测失败，2026-11-09）：补丁后 WL 根本没 attach 时，
+  `modprobe brcmfmac` 会报 `chip backplane type 15 is not supported`（probe `-19`），
+  重试 5 次、跨 60 s 都不行；若 WL 固件已加载但还空转，补丁会打出成片
+  `data error` 且 AP 起不来。唯一可行的是「WL 先 attach → 补丁 → 整次重绑」。
+- 判据只能看输出内容：固件卡死时 `iw dev wlan0 info` 的退出码仍是 0，只是不再打印
+  `channel` 行。用退出码判断会得到假阳性（本项目踩过）。
+- 卡死时的指纹：固件只回 `-110`（dmesg 里 `resumed on timeout` / `chanspec failed`），
+  hostapd 却照旧报 `ENABLED`，客户端连不上、hostapd 日志里连 auth 帧都没有。
+  这种卡死不会自愈，只能 `wifi-mode.sh ap`（内部走 `sdio-reset.sh`，实测约 2 分钟，
+  BT/PAN 不受牵连）。
+- 开机 dmesg 里的 `brcmf_p2p_notify_action_frame_rx` 栈越界告警（`memcpy ... size 67 / 26`）
+  是 brcmfmac 已知 bug，收到 action frame 时触发；目前未观察到它单独导致卡死，但属于内存破坏点。
+- AP 跑起来后再开 PAN 流量，WiFi 侧曾有掉到 `down` 的记录，重连用 `wifi-mode.sh ap`。
+- 蜂窝延迟明显高于本地 WiFi（实测 40–240 ms），带宽约百 KB/s 量级；属正常。
+- iPhone 热点关闭、离开范围或锁屏断开后 `bnep0` 会失效，`bt-tether.sh` 可重跑恢复。
+
 ## 启动链
 
 | eMMC 分区 | 用途 |

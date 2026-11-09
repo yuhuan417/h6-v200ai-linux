@@ -1,0 +1,15 @@
+[Unit]
+Description=V200-AI Bluetooth tether (iPhone PAN) uplink
+After=v200ai-ap.service v200ai-bt-late.service systemd-networkd.service bluetooth.service
+Wants=v200ai-bt-late.service
+ConditionPathExists=/etc/v200ai-bt-tether.conf
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/bt-tether.sh --ensure-ap
+RemainAfterExit=yes
+# --ensure-ap 可能触发 sdio-reset（内核拆设备要等 ~60s）+ 重拉 AP，给足余量
+TimeoutStartSec=300
+
+[Install]
+WantedBy=multi-user.target

@@ -26,6 +26,9 @@ Allwinner H6 / IT-LINK IT6335（BCM4335）主板的 Debian Linux 适配与维护
 WiFi 与蓝牙可以共存；**WiFi STA+AP 在当前固件/驱动组合下不可用**。
 SDR50 100 MHz 与 DDR50 50 MHz 冷启动均未通过，封版使用单沿 50 MHz。
 
+AP + 蓝牙上行可以同时工作：WiFi 只做热点，外网走 iPhone 的蓝牙 PAN（`bnep0`），
+AP 客户端由 NAT 共享这条链路。见 [维护与恢复](docs/maintenance.md)。
+
 ## 使用
 
 ```sh
@@ -33,7 +36,12 @@ ssh root@192.168.60.1
 wifi-mode.sh status
 wifi-mode.sh ap
 wifi-mode.sh sta
+wifi-mode.sh boot-mode sta    # 开机首选模式；ap|sta 手工切换不改它
+bt-tether.sh                  # 建蓝牙 PAN 上行（需 /etc/v200ai-bt-tether.conf）
 ```
+
+开机首选模式记在 `/etc/v200ai-wifi-mode`，首选失败会回退另一种，见
+[维护与恢复](docs/maintenance.md)。
 
 源码快照中的 AP 密码 `v200ai1234` 是公开的开发默认值。部署到其他网络时设置自己的配置；
 STA 凭据、SSH 密钥、蓝牙配对记录和完整镜像均不在仓库中。

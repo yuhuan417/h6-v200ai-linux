@@ -4,7 +4,7 @@ set -euo pipefail
 repo=$(cd "$(dirname "$0")/.." && pwd)
 : "${KERNEL_HEADERS:?Set KERNEL_HEADERS to the matching Debian 6.1.0-54-arm64 headers}"
 cross=${CROSS_COMPILE:-aarch64-linux-gnu-}
-for part in bluetooth iommu usb3; do
+for part in bluetooth iommu usb3 brcmfmac; do
     dest="$repo/build/modules/$part"
     mkdir -p "$dest" "$repo/dist/modules/$part"
     cp "$repo/kernel/$part/"* "$dest/"

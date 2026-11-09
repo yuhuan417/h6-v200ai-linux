@@ -40,6 +40,20 @@ KERNEL_HEADERS=/path/to/linux-headers-6.1.0-54-arm64 scripts/build-modules.sh
 dwc3、xhci-hcd、xhci-plat-hcd、roles、ulpi、V4L2/videobuf2/mc、jitterentropy_rng、drbg、cmac、autofs4。
 升级内核必须同步重建自建模块，不能只复制旧 ko。
 
+### brcmfmac（外置，含本地补丁）
+
+`kernel/brcmfmac/` 是上游 `v6.1.190` 的 brcmfmac 源码，只加一个补丁
+`0001-v200ai-sdio-teardown.patch`：默认跳过 `brcmf_chip_set_passive()`
+（参数 `brcmfmac.skip_core_disable=0` 可恢复），另给 KSO 轮询补墙钟上限 ——
+CMD52 在 mmc 层没有完成超时，死芯片上一条命令卡 ~54 s。
+原因、栈证据和两个失败过的中间版本见 [封版驱动依据](drivers.md)。
+约 62 个源文件，`include/` 里的 brcm_* 头已平铺到同目录，
+`Makefile` 用 `obj-m := brcmfmac.o`，`-I $(src)`。
+
+构建产物**替换发行版模块** `/lib/modules/6.1.0-54-arm64/kernel/drivers/net/wireless/broadcom/brcm80211/brcmfmac/brcmfmac.ko`，
+属于驱动替换：装前备份原 ko，`depmod -a` 后重启验证；失败就在 USB NCM 管理通道上把原 ko 拷回。
+vermagic 必须与板上一致（`6.1.0-54-arm64 SMP mod_unload modversions aarch64`），构建后要 `strip --strip-debug`。
+
 ## U-Boot
 
 上游 commit：`03e45557e1f38a39a0c80fe30483130ff376cf92`。

@@ -1,0 +1,95 @@
+--- a/drivers/net/wireless/broadcom/brcm80211/brcmfmac/sdio.c
++++ b/drivers/net/wireless/broadcom/brcm80211/brcmfmac/sdio.c
+@@ -702,6 +702,7 @@
+ 	int err = 0;
+ 	int err_cnt = 0;
+ 	int try_cnt = 0;
++	unsigned long kso_timeout;
+ 
+ 	brcmf_dbg(TRACE, "Enter: on=%d\n", on);
+ 
+@@ -741,6 +742,13 @@
+ 		bmask = SBSDIO_FUNC1_SLEEPCSR_KSO_MASK;
+ 	}
+ 
++	/* V200-AI: 迭代次数上限换算成时间只在 SDIO 访问很快时成立。
++	 * 芯片已经不应答时，每次 readb/writeb 都要走完 sunxi-mmc 的失败路径
++	 * （~ms 级），20000 次就成了近一分钟的纯等待。这里补一个真正的墙钟上限，
++	 * 保持驱动原本想要的 1 秒预算（PMU_MAX_TRANSITION_DLY 为微秒）。
++	 */
++	kso_timeout = jiffies + msecs_to_jiffies(PMU_MAX_TRANSITION_DLY / 1000);
++
+ 	do {
+ 		/* reliable KSO bit set/clr:
+ 		 * the sdiod sleep write access is synced to PMU 32khz clk
+@@ -762,7 +770,8 @@
+ 		brcmf_sdiod_writeb(bus->sdiodev, SBSDIO_FUNC1_SLEEPCSR, wr_val,
+ 				   &err);
+ 
+-	} while (try_cnt++ < MAX_KSO_ATTEMPTS);
++	} while (try_cnt++ < MAX_KSO_ATTEMPTS &&
++		 !time_after(jiffies, kso_timeout));
+ 
+ 	if (try_cnt > 2)
+ 		brcmf_dbg(SDIO, "try_cnt=%d rd_val=0x%x err=%d\n", try_cnt,
+@@ -770,6 +779,10 @@
+ 
+ 	if (try_cnt > MAX_KSO_ATTEMPTS)
+ 		brcmf_err("max tries: rd_val=0x%x err=%d\n", rd_val, err);
++	/* V200-AI: 记录因墙钟上限而放弃的情况，便于确认没有静默死等 */
++	if (time_after(jiffies, kso_timeout) && (rd_val & bmask) != cmp_val)
++		brcmf_err("KSO %s gave up after %d tries (rd_val=0x%x err=%d)\n",
++			  on ? "on" : "off", try_cnt, rd_val, err);
+ 
+ 	if (on)
+ 		sdio_retune_release(bus->sdiodev->func1);
+@@ -2465,6 +2478,18 @@
+ 		return false;
+ }
+ 
++/* V200-AI: 拆设备时跳过对已死芯片的 SDIO 访问（两个开关，见各自使用点注释）。*/
++static bool skip_bus_stop_io = true;
++module_param(skip_bus_stop_io, bool, 0644);
++MODULE_PARM_DESC(skip_bus_stop_io,
++		 "Skip SDIO register cleanup in brcmf_sdio_bus_stop (default: true)");
++
++static bool skip_core_disable = true;
++module_param(skip_core_disable, bool, 0644);
++MODULE_PARM_DESC(skip_core_disable,
++		 "Skip chip core disable during teardown (default: true)");
++
++
+ static void brcmf_sdio_bus_stop(struct device *dev)
+ {
+ 	struct brcmf_bus *bus_if = dev_get_drvdata(dev);
+@@ -2485,7 +2510,12 @@
+ 		bus->watchdog_tsk = NULL;
+ 	}
+ 
+-	if (sdiodev->state != BRCMF_SDIOD_NOMEDIUM) {
++	/* V200-AI: 固件已经死掉时，下面每一个 SDIO 访问（CMD52）都要等满
++	 * sunxi-mmc 的失败路径（约 2.5 s），整段拆设备会多花 ~6 s；总线随后会被
++	 * pwrseq 重新上电并重新枚举，这些清理没有意义。brcmfmac.skip_bus_stop_io=0
++	 * 可恢复上游行为。
++	 */
++	if (!skip_bus_stop_io && sdiodev->state != BRCMF_SDIOD_NOMEDIUM) {
+ 		sdio_claim_host(sdiodev->func1);
+ 
+ 		/* Enable clock for device interrupts */
+@@ -4585,7 +4615,15 @@
+ 				 * necessary cores.
+ 				 */
+ 				msleep(20);
+-				brcmf_chip_set_passive(bus->ci);
++				/* V200-AI: 默认跳过。set_passive 会对每个 core 做 SDIO
++				 * 读-改-写，而 CMD52 在 mmc 层没有完成超时
++				 * （mmc_wait_for_cmd 只是 wait_for_completion）；固件已经死掉时
++				 * 一条命令要等 ~54 秒，整次拆设备卡满 60 秒。本板的恢复路径
++				 * 随后会把总线重绑（pwrseq 重新上电），这一步没有意义。
++				 * 需要上游行为时用 brcmfmac.skip_core_disable=0。
++				 */
++				if (!skip_core_disable)
++					brcmf_chip_set_passive(bus->ci);
+ 				brcmf_sdio_clkctl(bus, CLK_NONE, false);
+ 				sdio_release_host(bus->sdiodev->func1);
+ 			}

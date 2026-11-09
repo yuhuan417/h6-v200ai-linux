@@ -24,7 +24,11 @@ sleep 1
 # 2. 重绑 WiFi 主控并重新触发 pwrseq
 echo "$MMCDEV" > "$DRV/unbind" 2>/dev/null
 echo "  unbind 完成"
-sleep 2
+# 等 SDIO 卡真的消失再 bind（原来固定 sleep 2，白白多等）
+for _ in $(seq 1 20); do
+    [ -e /sys/bus/sdio/devices/mmc0:0001:1 ] || break
+    sleep 0.1
+done
 echo "$MMCDEV" > "$DRV/bind" 2>/dev/null
 echo "  bind 完成"
 

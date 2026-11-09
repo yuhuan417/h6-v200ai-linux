@@ -2,6 +2,7 @@
 # WiFi AP/STA 二选一维护入口；当前固件/驱动组合不支持 STA+AP 并发。
 # hostapd/dnsmasq 配置由本脚本生成；调用前确认有独立管理通道。
 # AP 开发默认密码已公开；不要在此提交私人 STA 凭据。
+# 开机首选模式由 /etc/v200ai-wifi-mode 决定（ap|sta，缺省 ap），见 boot-mode 子命令。
 set -u
 
 IFACE=wlan0
@@ -10,6 +11,7 @@ AP_CIDR=${AP_IP}/24
 AP_SSID=${AP_SSID:-v200ai}
 AP_PSK=${AP_PSK:-v200ai1234}
 HOSTAPD_CONF=/etc/hostapd/hostapd.conf
+BOOT_PREF=/etc/v200ai-wifi-mode
 
 need_root() { [ "$(id -u)" = 0 ] || { echo "需要 root"; exit 1; }; }
 
@@ -27,15 +29,36 @@ led_ap()  { echo 0 > "$LED_RED" 2>/dev/null; echo 1 > "$LED_BLUE" 2>/dev/null; }
 led_sta() { echo 1 > "$LED_RED" 2>/dev/null; echo 0 > "$LED_BLUE" 2>/dev/null; }   # STA → 红
 led_off() { echo 0 > "$LED_RED" 2>/dev/null; echo 0 > "$LED_BLUE" 2>/dev/null; }   # 无模式
 hostapd_running() { [ -n "$(hostapd_pid)" ]; }
+
+# AP 拆除时固件可能卡在 SDIO 控制通道上（brcmf_sdio_bus_rxctl），
+# 每条控制命令都要等满 2.5 s 超时才返回，SIGTERM 也只能排在它们后面。
+# 所以这里只给 3 s 窗口：超时说明固件已经不正常，直接重绑比干等省两分钟。
 stop_hostapd() {
     local i=0
-    if hostapd_running; then
-        pkill -f "hostapd .*hostapd.conf" 2>/dev/null || true
-        while hostapd_running; do
-            [ "$i" -lt 100 ] || { echo "hostapd did not stop"; return 1; }
-            sleep 0.1; i=$((i+1))
-        done
-    fi
+    hostapd_running || return 0
+    pkill -f "hostapd .*hostapd.conf" 2>/dev/null || true
+    while hostapd_running; do
+        [ "$i" -lt 30 ] || return 1
+        sleep 0.1; i=$((i+1))
+    done
+    return 0
+}
+
+# sdio-reset.sh 已经 pkill 过 hostapd；若进程仍挂在 rxctl 上就 SIGKILL 收尾
+stop_hostapd_hard() {
+    pkill -9 -f "hostapd .*hostapd.conf" 2>/dev/null || true
+    sleep 0.5
+}
+
+# 开机首选模式，由 /etc/v200ai-wifi-mode 决定；缺失或内容非法一律按 ap（历史行为）
+boot_pref() {
+    local m=""
+    [ -r "$BOOT_PREF" ] && m=$(tr -d ' \t\r\n' < "$BOOT_PREF" 2>/dev/null | tr 'A-Z' 'a-z')
+    case "$m" in ap|sta) echo "$m" ;; *) echo ap ;; esac
+}
+
+pref_hint() {
+    echo "  ℹ 开机首选: $(boot_pref)（wifi-mode.sh boot-mode <ap|sta> 修改）"
 }
 iface_type()      { iw dev "$IFACE" info 2>/dev/null | awk '/type/{print $2}'; }
 
@@ -57,6 +80,14 @@ do_status() {
 	fi
 	echo "--- 接口类型 ---"
 	echo "  $(iface_type)"
+	echo "--- 开机首选 ---"
+	echo "  $(boot_pref)"
+	echo "--- 蓝牙上行 ---"
+	if ip -4 addr show bnep0 2>/dev/null | grep -q "inet "; then
+		echo "  bnep0 $(ip -4 -br addr show bnep0 2>/dev/null | awk '{print $3}')"
+	else
+		echo "  未连接（bt-tether.sh 建立）"
+	fi
 	echo "--- 路由 ---"
 	ip route | head -3 | sed 's/^/  /'
 	echo "--- 外网 ---"
@@ -66,19 +97,34 @@ do_status() {
 do_sta() {
 	need_root
 	echo "→ 停止 AP 模式"
-	stop_hostapd || return 1
+	rebind=0
+	if ! stop_hostapd; then
+		rebind=1
+		echo "  ⚠ hostapd 3s 内未退出（固件卡在 SDIO 控制通道），跳过 ip/iw 直接重绑"
+	fi
 	systemctl stop dnsmasq 2>/dev/null
-	ip addr flush dev "$IFACE" 2>/dev/null
-	ip link set "$IFACE" down 2>/dev/null
 
-	# 切到 managed。brcmfmac 在 AP 模式有残留状态时，set type 会返回
-	# EAGAIN(-11)（"Resource temporarily unavailable"）。
-	# 此时重绑 SDIO 主控最省事 —— 固件重新加载后默认就是 managed。
-	if ! iw dev "$IFACE" set type managed 2>/dev/null; then
-		echo "  ⚠ set type managed 被拒（EAGAIN），改用 SDIO 重绑"
+	if [ "$rebind" = 1 ]; then
+		# 卡死的固件上再做 ip/iw 只会再叠几次 2.5 s 超时。
+		# sdio-reset 会 pkill hostapd 并重绑主控，固件重载后默认就是 managed。
 		/usr/local/bin/sdio-reset.sh >/dev/null 2>&1
+		stop_hostapd_hard
 		sleep 2
-		iw dev "$IFACE" set type managed 2>/dev/null || echo "  ✗ 仍无法切到 managed"
+		ip addr flush dev "$IFACE" 2>/dev/null
+	else
+		ip addr flush dev "$IFACE" 2>/dev/null
+		ip link set "$IFACE" down 2>/dev/null
+
+		# 切到 managed。brcmfmac 在 AP 模式有残留状态时，set type 会返回
+		# EAGAIN(-11)（"Resource temporarily unavailable"）。
+		# 此时重绑 SDIO 主控最省事 —— 固件重新加载后默认就是 managed。
+		if ! iw dev "$IFACE" set type managed 2>/dev/null; then
+			echo "  ⚠ set type managed 被拒（EAGAIN），改用 SDIO 重绑"
+			/usr/local/bin/sdio-reset.sh >/dev/null 2>&1
+			stop_hostapd_hard
+			sleep 2
+			iw dev "$IFACE" set type managed 2>/dev/null || echo "  ✗ 仍无法切到 managed"
+		fi
 	fi
 	ip link set "$IFACE" up
 
@@ -109,6 +155,7 @@ do_sta() {
 		echo "  ❌ 外网不通"
 	fi
 	echo "  🔴 LED: 红（STA 模式）"
+	pref_hint
 }
 
 do_ap() {
@@ -172,7 +219,16 @@ dhcp-host=$OWNMAC,ignore
 CONF
 
 	echo "→ 启动 hostapd + dnsmasq"
-	stop_hostapd || return 1
+	# 从卡死状态回滚时 hostapd 可能杀不掉：先重绑 SDIO 再来，别在这里直接放弃，
+	# 否则恢复守护也没法把板子拉回 AP。
+	if ! stop_hostapd; then
+		echo "  ⚠ hostapd 3s 内未退出，先重绑 SDIO 主控"
+		/usr/local/bin/sdio-reset.sh >/dev/null 2>&1
+		stop_hostapd_hard
+		sleep 2
+		ip link set "$IFACE" up
+		iw dev "$IFACE" set type __ap 2>/dev/null
+	fi
 	hostapd -B "$HOSTAPD_CONF" || { echo "  ✗ hostapd 启动失败"; exit 1; }
     # hostapd's process alone does not prove AP readiness.
     local ready=0
@@ -204,14 +260,33 @@ CONF
 	iw dev "$IFACE" info 2>/dev/null | awk '/ssid|channel/{print "  " $0}'
 	echo "  dnsmasq: $(systemctl is-active dnsmasq 2>&1)"
 	echo "  热点: SSID=$AP_SSID  密码=$AP_PSK  IP=$AP_IP"
-	echo "  ⚠ 此模式下没有外网（芯片不支持 STA+AP 并发，见 docs/drivers.md）"
+	echo "  ℹ WiFi 本身不提供外网；要外网用 bt-tether.sh 走蓝牙（见 docs/maintenance.md）"
 	led_ap
 	echo "  🔵 LED: 蓝（AP 模式）"
+	pref_hint
+}
+
+# 开机首选模式；ap/sta 手工切换不改它，避免一次临时试验变成长期默认。
+do_boot_mode() {
+	case "${1:-}" in
+	ap|sta)
+		[ "$(id -u)" = 0 ] || { echo "需要 root"; return 1; }
+		printf '%s\n' "$1" > "$BOOT_PREF"
+		echo "开机首选模式: $(boot_pref)"
+		;;
+	"")
+		echo "开机首选模式: $(boot_pref)"
+		;;
+	*)
+		echo "用法: $0 boot-mode [ap|sta]"; return 1
+		;;
+	esac
 }
 
 case "${1:-status}" in
-	status) do_status ;;
-	sta)    do_sta ;;
-	ap)     do_ap ;;
-	*)      echo "用法: $0 status|sta|ap"; exit 1 ;;
+	status)    do_status ;;
+	sta)       do_sta ;;
+	ap)        do_ap ;;
+	boot-mode) do_boot_mode "${2:-}" ;;
+	*)         echo "用法: $0 status|sta|ap|boot-mode [ap|sta]"; exit 1 ;;
 esac
