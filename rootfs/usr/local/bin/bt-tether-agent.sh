@@ -68,7 +68,8 @@ while :; do
     fi
     nap=5
     if ! pan_addressed; then
-        if /usr/local/bin/bt-tether.sh > /tmp/bt-tether.try 2>&1; then
+        # 整个尝试限时 150 s：连接 + DHCP 正常几秒，异常时也不能把守护卡死
+        if timeout 150 /usr/local/bin/bt-tether.sh > /tmp/bt-tether.try 2>&1; then
             cat /tmp/bt-tether.try >> "$LOG"
             log "上行就绪：$(ip -4 -br addr show bnep0 2>/dev/null | awk '{print $3}')"
         else

@@ -39,7 +39,8 @@ for _ in $(seq 1 100); do [ -e /sys/class/bluetooth/hci0 ] && break; sleep 0.1; 
 if pan_connected && ip link show "$IFACE" >/dev/null 2>&1; then
     log "PAN 已连接，跳过 Connect"
 else
-    if ! busctl call org.bluez "$DEV" org.bluez.Network1 Connect s nap >/dev/null 2>&1; then
+    # 手机热点没开时 BlueZ 可能一直等协商（实测可达 ~60 s），加超时避免阻塞调用方
+    if ! timeout 45 busctl call org.bluez "$DEV" org.bluez.Network1 Connect s nap >/dev/null 2>&1; then
         log "Network1 Connect nap 失败（iPhone 热点没开 / 不在范围？）"
         exit 1
     fi
