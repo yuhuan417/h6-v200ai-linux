@@ -1,15 +1,16 @@
 [Unit]
-Description=V200-AI Bluetooth tether (iPhone PAN) uplink
+Description=V200-AI tether/AP supervisor (keep AP up, connect iPhone when it appears)
+# AP 由 v200ai-ap.service 常驻；这里只做守护：
+#   · hostapd 掉线或固件无响应时重拉 AP（5 分钟最多一次）
+#   · iPhone 蓝牙/热点可用时才连 PAN，连上后断开也会自动重连
 After=v200ai-ap.service v200ai-bt-late.service systemd-networkd.service bluetooth.service
 Wants=v200ai-bt-late.service
-ConditionPathExists=/etc/v200ai-bt-tether.conf
 
 [Service]
-Type=oneshot
-ExecStart=/usr/local/bin/bt-tether.sh --ensure-ap
-RemainAfterExit=yes
-# --ensure-ap 可能触发 sdio-reset（内核拆设备要等 ~60s）+ 重拉 AP，给足余量
-TimeoutStartSec=300
+Type=simple
+ExecStart=/usr/local/bin/bt-tether-agent.sh
+Restart=always
+RestartSec=10
 
 [Install]
 WantedBy=multi-user.target

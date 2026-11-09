@@ -57,8 +57,13 @@ wifi-mode.sh status                 # 会显示 bnep0 地址
   → 探测 channel 行（1 s 超时）确认失效
   → sdio-reset 重绑（驱动 attach 过才有效）
   → v200ai-ap：wifi-mode.sh ap 起 hostapd
-  → v200ai-bt-tether：PAN + NAT + DNS
+  → v200ai-bt-tether：常驻守护，PAN + NAT + DNS（iPhone 出现才连）
   ```
+
+  `bt-tether-agent.sh` 每 20 s 循环一次：`bnep0` 没地址就调 `bt-tether.sh` 试连，
+  连上后断开也会自动重连；同时守着 AP（hostapd 非 ENABLED 或 `channel` 行消失时
+  重拉，5 分钟最多一次）。所以 **AP 与 iPhone 是否在附近无关**，手机蓝牙/热点什么时候
+  可用就什么时候建立上行；失败日志每 5 分钟才记一条。
 
   实测开机到「AP + 外网齐活」**28.5 s**（各段：brcmfmac attach 6.8 s、补丁 14.6 s、
   探测 1.4 s、重绑 3.6 s、hostapd 5.7 s、tether 3.1 s）。
