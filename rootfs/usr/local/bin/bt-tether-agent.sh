@@ -14,8 +14,7 @@
 set -u
 LOG=/var/log/bt-tether.log
 PREF_CONF=/etc/v200ai-wifi-mode
-INTERVAL=20          # 已连上时的巡检间隔
-FAIL_INTERVAL=60     # 手机不在时的重试间隔（Connect 会走蓝牙寻呼，别太密）
+INTERVAL=20          # 固定周期：每 20 s 一轮（连不上也照这个节奏重试）
 HEAL_MIN_GAP=300
 FAIL_LOG_GAP=300
 
@@ -45,6 +44,7 @@ BT_ADDR=""
 log "启动（BT_ADDR=${BT_ADDR:-未配置}，间隔 ${INTERVAL}s）"
 
 while :; do
+    round_start=$(date +%s)
     pref=ap
     [ -r "$PREF_CONF" ] && pref=$(tr -d ' \t\r\n' < "$PREF_CONF" 2>/dev/null | tr 'A-Z' 'a-z')
 
@@ -66,10 +66,9 @@ while :; do
         sleep "$INTERVAL"
         continue
     fi
-    nap=5
     if ! pan_addressed; then
-        # 整个尝试限时 150 s：连接 + DHCP 正常几秒，异常时也不能把守护卡死
-        if timeout 150 /usr/local/bin/bt-tether.sh > /tmp/bt-tether.try 2>&1; then
+        # 单次尝试限时 40 s（Connect 本身 12 s 超时），异常时也不拖慢 20 s 节拍
+        if timeout 40 /usr/local/bin/bt-tether.sh > /tmp/bt-tether.try 2>&1; then
             cat /tmp/bt-tether.try >> "$LOG"
             log "上行就绪：$(ip -4 -br addr show bnep0 2>/dev/null | awk '{print $3}')"
         else
@@ -81,11 +80,11 @@ while :; do
                 } >> "$LOG"
                 last_fail_log=$now
             fi
-            nap=$((FAIL_INTERVAL / 5))
         fi
     fi
 
-    # nap 是「5 秒的倍数」：连上/巡检用 INTERVAL，失败用 FAIL_INTERVAL
-    [ "$nap" = 5 ] && nap=$((INTERVAL / 5))
-    sleep $((nap * 5))
+    # 按「本轮开始时刻」对齐，保证 steady 20 s 一轮（本轮超时就立刻进下一轮）
+    elapsed=$(( $(date +%s) - round_start ))
+    pause=$((INTERVAL - elapsed))
+    [ "$pause" -gt 0 ] && sleep "$pause"
 done
