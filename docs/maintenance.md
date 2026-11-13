@@ -98,14 +98,11 @@ bootloader 写在用户区 **8 KiB 偏移**，不是 boot0/boot1。
 
 | p1 文件 | 行为 |
 | --- | --- |
-| `umshold.flag` 存在 | U-Boot 进入 UMS |
-| 无闩且 `noswitch` 存在 | 启动 initramfs USB 串口 shell |
-| 两者均无 | 正常启动 Debian |
+| `noswitch` 存在 | 启动 initramfs USB 串口 shell |
+| `noswitch` 不存在 | 正常启动 Debian |
 
-U-Boot 引导内核前写 UMS 闩，Debian 的 v200ai-latch 服务清除它。
-`boot/uboot-env.txt` 是去掉一次实验选择器的普通封版环境文本。
-本次清理已获确认；板上环境已换成上述普通路径，原载荷及待删文件已在主机备份。
-不要删除当前环境仍可能需要的文件，或在 UMS 闩存在时误判为 Linux 不启动。
+启动不再读取、创建或清除 `umshold.flag`；加载 `Image`、`initrd.img` 或 DTB 失败，
+以及 `booti` 返回时，U-Boot 仍进入 UMS 供修复启动文件。`boot/uboot-env.txt` 是当前环境文本。
 
 initramfs 是裁剪的 klibc 环境，命令能力有限；保留 `exec chroot /rootfs /sbin/init`。
 不要替换成在该控制台失败过的 run-init。保留 NLS、ext4 CRC、固定电源和 USB 依赖。

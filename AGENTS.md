@@ -18,7 +18,7 @@
 - SDIO 50 MHz 单沿、4-bit、原 sunxi-mmc；eMMC 52 MHz。
 - 蓝牙 AP 就绪后加载，参数 `v200ai_speed=1500000`，切速后等待 50 ms，8N2。
 - 保留 RNG、cmac、IOMMU、USB3 PHY、视频依赖及其加载顺序。
-- 保留原 UMS 闩与 initramfs klibc chroot 恢复路径。
+- 保留启动载荷加载失败时的 UMS 回落与 initramfs klibc chroot 恢复路径；不使用 FAT 闩控制启动。
 - WiFi/BT 固件和 NVRAM 以 SHA256 为准；不要替换成名称相似的固件。
 
 ## 排查纪律

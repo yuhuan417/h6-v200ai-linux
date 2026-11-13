@@ -1,3 +1,3 @@
-bootcmd=if fatsize mmc 1:1 umshold.flag; then ums 0 mmc 1; fi; mw.b 0x4e000000 0x31 1; fatwrite mmc 1:1 0x4e000000 umshold.flag 1; if fatload mmc 1:1 0x40080000 Image; then if fatload mmc 1:1 0x4FF00000 initrd.img; then setenv isz ${filesize}; if fatload mmc 1:1 0x4FA00000 v200ai.dtb; then booti 0x40080000 0x4FF00000:${isz} 0x4FA00000; fi; fi; fi; ums 0 mmc 1
+bootcmd=if fatload mmc 1:1 0x40080000 Image; then if fatload mmc 1:1 0x4FF00000 initrd.img; then setenv isz ${filesize}; if fatload mmc 1:1 0x4FA00000 v200ai.dtb; then booti 0x40080000 0x4FF00000:${isz} 0x4FA00000; fi; fi; fi; ums 0 mmc 1
 bootargs=log_buf_len=4M console=ttyGS0,115200 root=PARTUUID=8d68c129-03 rootwait rw panic=0
 bootdelay=0

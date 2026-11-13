@@ -30,31 +30,26 @@ roundtrip = subprocess.check_output(['dtc', '-q', '-I', 'dtb', '-O', 'dts', str(
 assert roundtrip == (root / 'board/h6-v200ai.dts').read_text()
 env = (root / 'dist/uboot.env').read_bytes()
 assert len(env) == 65536 and struct.unpack('<I', env[:4])[0] == zlib.crc32(env[4:])
-assert b'once.flag' not in env and b'ums 0 mmc 1' in env
+assert all(token not in env for token in (b'once.flag', b'umshold.flag', b'fatsize', b'fatwrite'))
+assert b'ums 0 mmc 1' in env
 assert b'initrd.img' in env and b'v200ai.dtb' in env
 # Verify the final boot script's recovery branches without touching a device.
 bootcmd = next(line.split('=', 1)[1] for line in (root / 'boot/uboot-env.txt').read_text().splitlines() if line.startswith('bootcmd='))
 stub = '''
-fatsize() { test "$HOLD" = 1; }
-mw.b() { :; }
-fatwrite() { echo LATCH; }
 fatload() { echo LOAD:"$4"; filesize=1234; test "$4" != "$FAIL_FILE"; }
 setenv() { export "$1=$2"; }
 booti() { if test "$BOOT_FAIL" = 1; then return 1; fi; echo BOOT; exit 0; }
 ums() { echo UMS; exit 0; }
 '''
-for hold, fail, boot_fail, wanted in [
-    ('0', 'none', '0', 'BOOT'), ('1', 'none', '0', 'UMS'),
-    ('0', 'Image', '0', 'UMS'), ('0', 'initrd.img', '0', 'UMS'),
-    ('0', 'v200ai.dtb', '0', 'UMS'), ('0', 'none', '1', 'UMS'),
+for fail, boot_fail, wanted in [
+    ('none', '0', 'BOOT'),
+    ('Image', '0', 'UMS'), ('initrd.img', '0', 'UMS'),
+    ('v200ai.dtb', '0', 'UMS'), ('none', '1', 'UMS'),
 ]:
-    result = subprocess.check_output(['bash', '-c', stub + '\n' + bootcmd], env=dict(PATH=os.environ['PATH'], HOLD=hold, FAIL_FILE=fail, BOOT_FAIL=boot_fail)).decode()
+    result = subprocess.check_output(['bash', '-c', stub + '\n' + bootcmd], env=dict(PATH=os.environ['PATH'], FAIL_FILE=fail, BOOT_FAIL=boot_fail)).decode()
     assert result.splitlines()[-1] == wanted, result
-    if hold == '1':
-        assert result == 'UMS\n'
-    else:
-        assert result.index('LATCH') < result.index('LOAD:Image')
+    assert 'LATCH' not in result
 uart = (root / 'kernel/bluetooth/hci_bcm.c').read_text()
 assert 'msleep(50)' in uart and 'v200ai_speed' in uart
 assert 'v200ai_speed=1500000' in (root / 'rootfs/etc/modprobe.d/v200ai-bt-baud.conf').read_text()
-print('PASS: script syntax, links, DTS/NVRAM, environment CRC, six UMS boot branches and fixed BT configuration')
+print('PASS: script syntax, links, DTS/NVRAM, environment CRC, four UMS boot branches without latch and fixed BT configuration')
