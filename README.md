@@ -17,11 +17,16 @@ Allwinner H6 / IT-LINK IT6335（BCM4335）主板的 Debian Linux 适配与维护
 | Type-C | MUSB，CDC-ACM 串口 `ttyGS0` + CDC-NCM 网络 `192.168.60.1` |
 | Type-A | DWC3 + H6 USB3 PHY + xHCI，历史 USB 存储枚举及读取已验证 |
 | 视频 | Cedrus / V4L2，IOMMU 与依赖已加载，`/dev/video0` 注册；未做完整编解码性能认证 |
+| CPU 频率/温控 | 外置 `v200ai_cpufreq` 只调时钟：480 / 720 / 816 / 888 MHz，上限不超过启动频率；85 °C 被动降频、100 °C critical |
 | locale | 默认 `C.UTF-8`，另提供 `en_US.UTF-8`，SSH 登录无 locale 警告 |
 
 2026-11-03 用户重启后再次核验：AP ENABLED、蓝牙实际 1500000、HCI/SDIO 错误计数 0、
 失败单元 0。Linux 启动耗时 **20.488 秒**，不含 Boot ROM / U-Boot。
 当前没有客户端吞吐复测；历史 AP iperf3 约 127/129 Mbps，仅供参考。
+
+频率与温控是本板默认能力：`sun8i_thermal` 提供温区，`v200ai_cpufreq` 把 CPU 时钟注册成
+cooling device 接管 DTB 已有的阈值；因为 AXP805/806 供电未验证，只降频不调压，
+也不改 DTB 和 governor。见 [封版驱动依据](docs/drivers.md)。
 
 WiFi 与蓝牙可以共存；**WiFi STA+AP 在当前固件/驱动组合下不可用**。
 SDR50 100 MHz 与 DDR50 50 MHz 冷启动均未通过，封版使用单沿 50 MHz。
@@ -53,7 +58,7 @@ STA 凭据、SSH 密钥、蓝牙配对记录和完整镜像均不在仓库中。
 | --- | --- |
 | `board/` | 当前 Linux DTS、已部署关键文件 SHA256 |
 | `rootfs/` | 板上实际使用的服务、模块参数、启动与维护脚本 |
-| `kernel/` | 与封版匹配的蓝牙、H6 IOMMU、USB3 PHY 源码 |
+| `kernel/` | 与封版匹配的蓝牙、H6 IOMMU、USB3 PHY、CPU 温控源码 |
 | `boot/` | 当前 initramfs `/init`、清理后的常规 U-Boot 环境文本 |
 | `uboot/` | 已有 U-Boot 适配补丁与使用的 defconfig；不重刷已工作的 bootloader |
 | `firmware/` | NVRAM、固件来源和校验清单；二进制由来源获取 |

@@ -7,6 +7,7 @@
   "/lib/firmware/brcm/BCM4335A0.hcd": "3e14e7f3c02e19408c5783f845329309e23305ab5f33fb19abfd24a73a84cd8a",
   "/lib/modules/6.1.0-54-arm64/kernel/drivers/bluetooth/btbcm.ko": "cc447078acae6d027dff7ca9e695c7d6925121b9f0569a665f0476cb6035547b",
   "/lib/modules/6.1.0-54-arm64/kernel/drivers/bluetooth/hci_uart.ko": "ead017113c69de841ffdcaf5115c537689bcb7ef7a937c21bf953fc1ac85d551",
+  "/lib/modules/6.1.0-54-arm64/extra/v200ai_cpufreq.ko": "36850bfd2bd9dba4deb4df882732585b66b668859738442d163129f332911ee2",
   "/lib/modules/6.1.0-54-arm64/kernel/drivers/iommu/sun50i-iommu.ko": "e3b15a22a68ceede4030f148353ec1ae39054bdd4a426c0a701b62bd83037ccd",
   "/lib/modules/6.1.0-54-arm64/kernel/drivers/phy/allwinner/phy-sun50i-usb3.ko": "777d99b5b0baae5fb451d7630d47db9bee0a4577757a1779cfb9aa30a8535ea6",
   "/boot/firmware/uboot.env": "bf91a004cc09755c028ce326016bbf11ada9fd004b8763389589f7c7d7172f83"

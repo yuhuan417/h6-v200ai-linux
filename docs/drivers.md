@@ -84,6 +84,56 @@ PHY 的法规域由固件管理，缺少可选 CLM blob 的提示仍存在；已
 （AP ENABLED 或 STA 已关联）后显式 modprobe。
 `cmac`、`jitterentropy_rng`、`drbg` 提前加载，以支持 ECDH 自检及 BLE 安全配对。
 
+## CPU 频率与温控
+
+CPU 默认带降频温控，由 `kernel/cpufreq/` 的外置模块 `v200ai_cpufreq` 提供；
+`sun8i_thermal` 用 Debian 原包模块，`kernel/config-6.1.0-54-arm64` 里
+`CONFIG_SUN8I_THERMAL=m`、`CONFIG_CPU_THERMAL=y`、`CONFIG_CPU_FREQ_THERMAL=y`
+已经就绪，因此不需要重新编译内核，也不改 DTB。
+
+### 为什么不是 cpufreq-dt
+
+DTB 的 `cpu@0` 带 `operating-points-v2` 和 `cpu-supply = <AXP805/806>`，本来该由
+`cpufreq-dt` 接管；但该 PMIC 的 I²C 探测超时（`-110`），regulator 拿不到，
+依赖调压的 DVFS 无法安全成立。板子启动后停在 888 MHz 固定频率。
+硬把 dummy regulator 或 OPP 表接上去只会**调频不调压**，超出启动电压对应的频率区间；
+所以最终方案是反过来：只降频、不调压、不碰 PMIC。
+
+### 模块做什么
+
+- 通过 `of_clk_get(cpu->of_node, 0)` 拿已有的 CPU 时钟，`cpufreq_register_driver()`
+  注册 `v200ai-clock`，四核共用一个 policy（`affected_cpus=0 1 2 3`）。
+- 频率表 480 / 720 / 816 / 888 MHz，全部取自本板 DTB 的 OPP 表；加载时用
+  `clk_round_rate()` 逐个校验，并把高于当前时钟的档位置为无效。
+- 上限 `ceiling_hz = min(启动时钟, 888 MHz)`，`target_index` 里再判一次越界。
+- `CPUFREQ_IS_COOLING_DEV` 让内核注册 `cpufreq-cpu0`（`max_state=3`），
+  绑到 DTB 已有的 `cpu-thermal` trip：85 °C passive + 2 °C 回滞。
+- `cpu-thermal` 的 `polling-delay` 是 0（本板 DTB 原样），模块自带 1 s delayed work
+  调 `thermal_zone_device_update()`，否则温区只有读取时才采样、不会主动降温。
+- 不改 governor（默认 `schedutil`）、不改阈值、不改 DTB、不访问 PMIC。
+
+### 实机验证（2026-11-18 部署，2026-11-23 复核）
+
+| 检查 | 结果 |
+| --- | --- |
+| boot 日志 | `v200ai-cpufreq: boot=888000 kHz ceiling=888000 kHz, voltage unchanged` |
+| policy | `scaling_driver=v200ai-clock`，`scaling_available_frequencies=480000 720000 816000 888000`，`scaling_max_freq=888000` |
+| cooling device | `/sys/class/thermal/cooling_device0/type=cpufreq-cpu0`，`cur_state=0`，`max_state=3` |
+| 温区 | `thermal_zone0` = `cpu-thermal`，trips `passive 85000/2000` + `critical 100000`，`policy=step_wise` |
+| 人工限制 | `cur_state=3` → `cpuinfo_cur_freq=480000`；解除后 `performance` 可回 888 MHz |
+| 自然升温 | 85.9 °C 时上限 888→816 MHz，回落到约 83 °C 恢复 888 MHz |
+| 待机读数 | CPU 55.6 °C、GPU 53.4 °C（本次开机 7 分钟，非满载） |
+
+### 范围与遗留
+
+- **GPU 温控不生效**：`gpu-thermal` 温区有读数、DTB 也定义了 95/100/105 °C passive 和
+  115 °C critical，但板上没有对应的 devfreq cooling device（`/sys/class/thermal/` 只有
+  `cooling_device0`），那三个 cooling map 目前是空转。本模块不接管 GPU，也不引入 devfreq 调控。
+- 模块未签名，内核据此 taint（`module verification failed`），与既有三个自建模块一致；
+  没有启用强制模块签名，不影响加载。
+- 卸载模块不会自动升频，重新加载上限取当时时钟；整机重新上电才回到 888 MHz。
+- 该模块与 SDIO/蓝牙/USB/IOMMU/视频无关，只动 CPU 时钟和温区，不改变封版的加载顺序。
+
 ## USB 与视频
 
 Type-C：MUSB gadget，启动 initramfs 先提供 g_serial，Debian 再建立 ACM+NCM。

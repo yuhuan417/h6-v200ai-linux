@@ -9,6 +9,8 @@ python3 scripts/check-board.py --host root@192.168.60.1
 此工具只读取 sysfs、hostapd 控制接口、HCI 和 systemd 状态，不切换网络、不写 eMMC。
 WiFi 异常时保持 USB 管理通道，优先检查 dmesg、`/sys/class/net/wlan0/operstate` 和 MMC err_stats。
 不要在 SDIO 可能卡住时跑 netlink dump；阻塞的 rtnl 可能连带使新 SSH 无法登录。
+脚本同时核对 CPU 频率与温控：`v200ai-clock` 驱动、四个频率档位、85 °C/100 °C 阈值和
+`cpufreq-cpu0` cooling device。
 
 `wifi-mode.sh ap|sta` 会重建配置并切换接口，属于有副作用的维护命令；
 `sdio-reset.sh` 重绑 WiFi 主控、重新触发 WL_REG_ON，能恢复部分故障但不代表物理切断所有电源。
@@ -22,6 +24,33 @@ AP 拆除时固件可能卡在 SDIO 控制通道（`brcmf_sdio_bus_rxctl`，dmes
 hostapd 的 SIGTERM 只能排在每条约 2.5 s 的超时之后。`do_sta` 只给 3 s 退出窗口，
 超时即直接 `sdio-reset.sh` 重绑并用 SIGKILL 收尾，不再干等约两分钟；`do_ap` 同样处理，
 保证恢复守护回滚 AP 时能走通。
+
+## CPU 频率与温控
+
+CPU 的降频温控是默认能力，加载顺序由 `/etc/modules-load.d/v200ai-cpufreq.conf` 固定：
+`sun8i_thermal`（温区）在前，`v200ai_cpufreq`（cooling device）在后。
+
+```sh
+cat /sys/devices/system/cpu/cpufreq/policy0/scaling_driver            # v200ai-clock
+cat /sys/devices/system/cpu/cpufreq/policy0/scaling_available_frequencies
+cat /sys/devices/system/cpu/cpufreq/policy0/scaling_cur_freq          # governor 的请求，kHz
+cat /sys/devices/system/cpu/cpufreq/policy0/cpuinfo_cur_freq          # 实际时钟，kHz
+cat /sys/class/thermal/thermal_zone0/temp                             # 毫摄氏度
+cat /sys/class/thermal/cooling_device0/type /sys/class/thermal/cooling_device0/cur_state
+sha256sum /lib/modules/$(uname -r)/extra/v200ai_cpufreq.ko            # 对 board/baseline-sha256.json
+```
+
+- `scaling_cur_freq` 是 schedutil 最近一次请求，`cpuinfo_cur_freq` 才是实际时钟，
+  两者短暂不一致是正常的，不要据此判断模块失效。
+- 温度到 85 °C 时 CPU 上限从 888 MHz 降到 816 MHz，回落到约 83 °C 后恢复；
+  100 °C critical 由内核直接保护，不经过本模块。
+- 只有 `sun8i_thermal` 加载成功才有 `cpu-thermal` 温区和 `/sys/class/thermal/thermal_zone0/temp`；
+  模块缺失时先看 dmesg 里的 `v200ai-cpufreq:` 行和 `systemctl status systemd-modules-load`。
+- 重新编译/替换 ko 属于写 eMMC，按 AGENTS.md 逐次确认；构建、部署与回退命令见
+  [主机构建](build.md)，设计取舍见 [封版驱动依据](drivers.md)。
+
+卸载模块后 CPU 停在当时的频率、不会自动升频，重新加载的新上限也是当时的时钟；
+要回到 888 MHz 只能整机重新上电。加入温控没有改动电源、待机或散热相关的其它策略。
 
 ## 蓝牙 tether（iPhone 上行）
 

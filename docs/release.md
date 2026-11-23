@@ -24,3 +24,13 @@ U-Boot FAT 环境改为不含 SDR/DDR 一次性选择器的正常环境，保留
 
 旧提交历史仅存主机私有 git bundle；public 仓库从本次封版快照开始。
 完整 eMMC 备份、实际当前载荷、清理前备份与历史均不上传 GitHub。
+
+## 2026-11-18 增补：CPU 频率与温控
+
+在 v1.0.0 快照之上增加板级默认能力：外置 `kernel/cpufreq/v200ai_cpufreq`（只调时钟的
+CPU 降频降温）、`/etc/modules-load.d/v200ai-cpufreq.conf`，以及板载 ko 的 SHA256 记录。
+`sun8i_thermal` 使用 Debian 原包模块。
+
+未改 DTB、内核 Image、bootloader、分区、默认网络和既有驱动；阈值仍是 DTB 里的
+85 °C passive / 100 °C critical，governor 仍是 `schedutil`，CPU 供电电压不变。
+设计取舍与实机读数见 [封版驱动依据](drivers.md)，构建和回退见 [主机构建](build.md)。

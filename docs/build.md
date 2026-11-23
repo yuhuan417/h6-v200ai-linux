@@ -37,8 +37,48 @@ KERNEL_HEADERS=/path/to/linux-headers-6.1.0-54-arm64 scripts/build-modules.sh
 用于核对既有板子，不宣称任意主机都能逐字节复现。
 
 从 Debian 同版本 `linux-image-6.1.0-54-arm64_6.1.190-1_arm64.deb` 补齐原版模块，至少包括：
-dwc3、xhci-hcd、xhci-plat-hcd、roles、ulpi、V4L2/videobuf2/mc、jitterentropy_rng、drbg、cmac、autofs4。
+dwc3、xhci-hcd、xhci-plat-hcd、roles、ulpi、V4L2/videobuf2/mc、jitterentropy_rng、drbg、cmac、
+autofs4、sun8i_thermal。
 升级内核必须同步重建自建模块，不能只复制旧 ko。
+
+### v200ai_cpufreq（外置，CPU 温控降频）
+
+`kernel/cpufreq/` 是只调时钟的降温模块，单文件、无外部依赖，随
+`scripts/build-modules.sh` 一起构建，产物 `dist/modules/cpufreq/v200ai_cpufreq.ko`。
+它复用内核已有的 CPU 时钟驱动和 DTB 温区，**不访问 PMIC、不改 DTB、不改 governor**，
+所以不需要重新编译内核：`kernel/config-6.1.0-54-arm64` 里
+`CONFIG_CPU_FREQ`、`CONFIG_CPU_FREQ_GOV_SCHEDUTIL`、`CONFIG_CPU_FREQ_THERMAL`、
+`CONFIG_THERMAL_OF` 已开启，`CONFIG_SUN8I_THERMAL=m` 由 Debian 原包提供。
+
+部署（属于写 eMMC，按 AGENTS.md 逐次确认；`sun8i_thermal` 已在板上，不要删）：
+
+```sh
+install -D -m 644 dist/modules/cpufreq/v200ai_cpufreq.ko \
+  /lib/modules/$(uname -r)/extra/v200ai_cpufreq.ko
+depmod -a
+install -D -m 644 rootfs/etc/modules-load.d/v200ai-cpufreq.conf \
+  /etc/modules-load.d/v200ai-cpufreq.conf
+modprobe v200ai_cpufreq
+```
+
+`/etc/modules-load.d/v200ai-cpufreq.conf` 里的两行顺序是硬要求：先 `sun8i_thermal`
+（温区），后 `v200ai_cpufreq`（cooling device），加载失败时 `systemd-modules-load` 会直接报错。
+板上若另有只写 `sun8i_thermal` 的 `sun8i-thermal.conf`，与本文件重复但幂等，可以保留；
+删除它同样需要本次确认。
+
+回退：
+
+```sh
+rm -f /etc/modules-load.d/v200ai-cpufreq.conf
+modprobe -r v200ai_cpufreq
+rm -f /lib/modules/$(uname -r)/extra/v200ai_cpufreq.ko
+depmod -a
+```
+
+卸载后 CPU 停在当时的频率，不会自动回升；温度传感器（`sun8i_thermal`）保持工作。
+重新加载时以当时的时钟作为新上限，所以低温态重载会得到更低的上限，整机重新上电才回到 888 MHz。
+部署后把 `sha256sum /lib/modules/$(uname -r)/extra/v200ai_cpufreq.ko` 的结果写回
+`board/baseline-sha256.json`；那里现有值对应 2026-11-18 的实机部署件。
 
 ### brcmfmac（外置，含本地补丁）
 

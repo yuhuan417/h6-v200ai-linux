@@ -52,4 +52,19 @@ for fail, boot_fail, wanted in [
 uart = (root / 'kernel/bluetooth/hci_bcm.c').read_text()
 assert 'msleep(50)' in uart and 'v200ai_speed' in uart
 assert 'v200ai_speed=1500000' in (root / 'rootfs/etc/modprobe.d/v200ai-bt-baud.conf').read_text()
-print('PASS: script syntax, links, DTS/NVRAM, environment CRC, four UMS boot branches without latch and fixed BT configuration')
+# CPU 温控默认能力：源码、加载顺序与内核选项三者必须同时成立。
+assert 'obj-m := v200ai_cpufreq.o' in (root / 'kernel/cpufreq/Makefile').read_text()
+cooling = (root / 'kernel/cpufreq/v200ai_cpufreq.c').read_text()
+assert 'CPUFREQ_IS_COOLING_DEV' in cooling
+assert 'of_machine_is_compatible("custom,h6-v200ai")' in cooling
+assert 'cpufreq' in (root / 'scripts/build-modules.sh').read_text()
+modules_load = [line.strip() for line in (root / 'rootfs/etc/modules-load.d/v200ai-cpufreq.conf').read_text().splitlines()
+                if line.strip() and not line.lstrip().startswith('#')]
+assert modules_load == ['sun8i_thermal', 'v200ai_cpufreq'], modules_load
+kconfig = (root / 'kernel/config-6.1.0-54-arm64').read_text().splitlines()
+for option in ('CONFIG_CPU_FREQ=y', 'CONFIG_CPU_FREQ_GOV_SCHEDUTIL=y',
+               'CONFIG_CPU_FREQ_THERMAL=y', 'CONFIG_THERMAL_OF=y',
+               'CONFIG_SUN8I_THERMAL=m'):
+    assert option in kconfig, option
+print('PASS: script syntax, links, DTS/NVRAM, environment CRC, four UMS boot branches without latch, '
+      'fixed BT configuration and CPU frequency/thermal module wiring')
