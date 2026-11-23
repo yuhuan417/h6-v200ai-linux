@@ -16,6 +16,7 @@ Allwinner H6 / IT-LINK IT6335（BCM4335）主板的 Debian Linux 适配与维护
 | 蓝牙 | UART1，**1.5 Mbps / 8N2**；先在 115200 下载补丁，切速后等待 50 ms |
 | Type-C | MUSB，CDC-ACM 串口 `ttyGS0` + CDC-NCM 网络 `192.168.60.1` |
 | Type-A | DWC3 + H6 USB3 PHY + xHCI，历史 USB 存储枚举及读取已验证 |
+| Type-A USB 网卡 | Realtek RTL8156（`0bda:8156`）走 CDC-NCM 驱动成以太口；厂商模式 r8152 初始化失败，USB2 480 Mbps，以太吞吐未测 |
 | 视频 | Cedrus / V4L2，IOMMU 与依赖已加载，`/dev/video0` 注册；未做完整编解码性能认证 |
 | CPU 频率/温控 | 外置 `v200ai_cpufreq` 只调时钟：480 / 720 / 816 / 888 MHz，上限不超过启动频率；85 °C 被动降频、100 °C critical |
 | locale | 默认 `C.UTF-8`，另提供 `en_US.UTF-8`，SSH 登录无 locale 警告 |

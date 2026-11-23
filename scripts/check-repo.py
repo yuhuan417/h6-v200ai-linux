@@ -66,5 +66,9 @@ for option in ('CONFIG_CPU_FREQ=y', 'CONFIG_CPU_FREQ_GOV_SCHEDUTIL=y',
                'CONFIG_CPU_FREQ_THERMAL=y', 'CONFIG_THERMAL_OF=y',
                'CONFIG_SUN8I_THERMAL=m'):
     assert option in kconfig, option
+# Type-A USB 网卡固定走 CDC-NCM，r8152 不参与。
+usbnet_load = [line.strip() for line in (root / 'rootfs/etc/modules-load.d/v200ai-usbnet.conf').read_text().splitlines()
+               if line.strip() and not line.lstrip().startswith('#')]
+assert usbnet_load == ['usbnet', 'cdc_ether', 'cdc_ncm'], usbnet_load
 print('PASS: script syntax, links, DTS/NVRAM, environment CRC, four UMS boot branches without latch, '
-      'fixed BT configuration and CPU frequency/thermal module wiring')
+      'fixed BT configuration, CPU frequency/thermal and USB-NIC CDC-NCM wiring')

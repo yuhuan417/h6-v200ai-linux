@@ -25,6 +25,10 @@ test "$(cat /sys/class/thermal/thermal_zone0/trip_point_0_type)" = passive
 test "$(cat /sys/class/thermal/thermal_zone0/trip_point_0_temp)" = 85000
 test "$(cat /sys/class/thermal/thermal_zone0/trip_point_1_temp)" = 100000
 grep -q cpufreq /sys/class/thermal/cooling_device*/type
+test -f /lib/modules/$(uname -r)/kernel/drivers/net/usb/cdc_ncm.ko
+test ! -e /lib/modules/$(uname -r)/kernel/drivers/net/usb/r8152.ko
+lsmod | grep -q '^cdc_ncm '
+ip -br link | grep '^enx' || true
 LC_ALL=en_US.UTF-8 bash -lc 'test "$(locale charmap)" = UTF-8'
 cat /sys/devices/system/cpu/cpufreq/policy0/scaling_available_frequencies
 cat /sys/devices/system/cpu/cpufreq/policy0/scaling_cur_freq

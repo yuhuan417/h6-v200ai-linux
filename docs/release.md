@@ -34,3 +34,11 @@ CPU 降频降温）、`/etc/modules-load.d/v200ai-cpufreq.conf`，以及板载 k
 未改 DTB、内核 Image、bootloader、分区、默认网络和既有驱动；阈值仍是 DTB 里的
 85 °C passive / 100 °C critical，governor 仍是 `schedutil`，CPU 供电电压不变。
 设计取舍与实机读数见 [封版驱动依据](drivers.md)，构建和回退见 [主机构建](build.md)。
+
+## 2026-11-23 增补：Type-A USB 网卡（CDC-NCM）
+
+插在 Type-A 的 Realtek RTL8156（`0bda:8156`）用 CDC-NCM 驱动成以太口，补齐原版模块
+`mii`、`usbnet`、`cdc_ether`、`cdc_ncm`，并用 `rootfs/etc/modules-load.d/v200ai-usbnet.conf`
+开机加载。厂商模式 r8152 在本板初始化失败（PLA 0xe820 读 `-71`），因此**不安装 r8152**。
+USB 侧为 High-Speed 480 Mbps；以太链路吞吐与稳定性尚未验证。细节见
+[封版驱动依据](drivers.md)。

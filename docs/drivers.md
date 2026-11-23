@@ -143,6 +143,38 @@ Type-A：`usb@5200000` 是 DWC3；其 USB2 信号也需要 `phy@5210000` 的 USB
 Debian 此版本未启用该 PHY，使用 `kernel/usb3/` 的外置模块。
 其余 dwc3/xHCI/roles/ulpi 来自匹配 Debian 内核包。历史 USB 存储读取约 15.2 MB/s。
 
+### Type-A USB 网卡（RTL8156，CDC-NCM）
+
+插在 Type-A 的 Realtek RTL8156（`0bda:8156`，bcdDevice 31.00，bcdUSB 2.10，总线供电 200 mA）
+只能走 **CDC-NCM**，不能走厂商模式。`lsusb -v` 显示三个 configuration：
+
+| config | 首接口 | 用途 | 本板结果 |
+| --- | --- | --- | --- |
+| 1 | ff/ff vendor specific | r8152 厂商模式 | 初始化失败 |
+| 2 | 02/0d CDC-NCM + 0a/01 | 标准 NCM | 可用，`cdc_ncm` 绑定 |
+| 3 | 02/06 CDC-ECM + 0a/00 | 标准 ECM | 备用，未验证 |
+
+usbcore 的 `usb_choose_configuration()` 跳过首接口是 vendor 类的 config，选 config 2，
+所以**不加载 r8152 时设备稳定落在 NCM 模式**。加载 r8152 会注册 `r8152-cfgselector`，
+它 `usb_set_configuration()` 切到 vendor config 1，然后死在读 MAC：
+
+```
+r8152-cfgselector 1-1: reset high-speed USB device number 3 using xhci-hcd
+r8152-cfgselector 1-1: Failed to read 4 bytes at 0xe820/0x0133 (-71)
+r8152 1-1:1.0: Get ether addr fail
+r8152 1-1:1.0: USB reset failed, errno=-19
+```
+
+`0xe820` 是 `PLA_CONFIG34`，该读发生在 `vendor_mac_passthru_addr_read()`；`-71` 是 EPROTO。
+
+因此**不要安装或加载 r8152**，只补齐四个原版模块 `mii`、`usbnet`、`cdc_ether`、`cdc_ncm`
+（取同版本 Debian image 包），`depmod -a` 后由
+`rootfs/etc/modules-load.d/v200ai-usbnet.conf` 开机加载；插拔时 udev 也能按 modalias 自动加载。
+
+实机：接口按 MAC 命名 `enx00e04c6801c2`（`00:e0:4c:68:01:c2`），USB 侧 High-Speed 480 Mbps，
+2.5G PHY 实际受 USB2 带宽限制；以太侧的链路吞吐与稳定性尚未测（缺网线/对端）。
+走 config 3 的 ECM 路径没有验证，默认不用。
+
 H6 IOMMU 使用 `kernel/iommu/` 外置模块，在 upstream 6.1.190 基础上增加 `.owner=THIS_MODULE`，
 保留永久驻留生命周期，不引入不完整的卸载。通过 softdep 早于 Cedrus/DRM 加载。
 Cedrus、V4L2、videobuf2、mc 等缺失依赖从同版本 Debian 包补齐；设备注册已验证，

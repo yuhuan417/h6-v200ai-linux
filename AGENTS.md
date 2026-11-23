@@ -20,6 +20,8 @@
 - 保留 RNG、cmac、IOMMU、USB3 PHY、视频依赖及其加载顺序。
 - 保留 CPU 温控默认能力：`sun8i_thermal` → `v200ai_cpufreq` 的加载顺序，阈值只在 DTB，
   模块只降频不调压；不得为提频去掉上限或启用依赖 PMIC 的 DVFS。
+- Type-A USB 网卡保留 CDC-NCM 路径：不安装、不加载 r8152（其 cfgselector 会切到 vendor
+  config 并初始化失败），只装 mii/usbnet/cdc_ether/cdc_ncm。
 - 保留启动载荷加载失败时的 UMS 回落与 initramfs klibc chroot 恢复路径；不使用 FAT 闩控制启动。
 - WiFi/BT 固件和 NVRAM 以 SHA256 为准；不要替换成名称相似的固件。
 

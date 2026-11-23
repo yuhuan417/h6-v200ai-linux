@@ -52,6 +52,23 @@ sha256sum /lib/modules/$(uname -r)/extra/v200ai_cpufreq.ko            # 对 boar
 卸载模块后 CPU 停在当时的频率、不会自动升频，重新加载的新上限也是当时的时钟；
 要回到 888 MHz 只能整机重新上电。加入温控没有改动电源、待机或散热相关的其它策略。
 
+## USB 网卡（Type-A）
+
+Type-A 上的 Realtek RTL8156 由 CDC-NCM 驱动，接口按 MAC 命名 `enx00e04c6801c2`。
+开机由 `/etc/modules-load.d/v200ai-usbnet.conf` 加载 `usbnet`/`cdc_ether`/`cdc_ncm`；
+热插拔时 udev 也会按 modalias 自动加载（两种情况都实测过）。
+
+```sh
+lsmod | grep -E '^(cdc_ncm|cdc_ether|usbnet|mii) '
+ip -br link | grep '^enx'
+dmesg | grep -E 'cdc_ncm|r8152' | tail
+```
+
+- **不要 `modprobe r8152`**：它注册的 cfgselector 会把设备切到 vendor config 1，
+  随后读 PLA 0xe820 报 `-71`、设备掉线；板上也没有 `r8152.ko`。
+- 接口 `DOWN` / `NO-CARRIER` 通常只是没插网线或对端没起；驱动没加载时接口不会出现。
+- USB 侧是 High-Speed 480 Mbps，2.5G PHY 受此限制；以太侧吞吐与稳定性尚未验证。
+
 ## 蓝牙 tether（iPhone 上行）
 
 芯片不支持 STA+AP 并发，但 **AP + 蓝牙 PAN 上行**可以共存：WiFi 只做热点，外网走 `bnep0`。

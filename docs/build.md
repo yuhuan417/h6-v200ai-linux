@@ -38,7 +38,7 @@ KERNEL_HEADERS=/path/to/linux-headers-6.1.0-54-arm64 scripts/build-modules.sh
 
 从 Debian 同版本 `linux-image-6.1.0-54-arm64_6.1.190-1_arm64.deb` 补齐原版模块，至少包括：
 dwc3、xhci-hcd、xhci-plat-hcd、roles、ulpi、V4L2/videobuf2/mc、jitterentropy_rng、drbg、cmac、
-autofs4、sun8i_thermal。
+autofs4、sun8i_thermal、mii、usbnet、cdc_ether、cdc_ncm。
 升级内核必须同步重建自建模块，不能只复制旧 ko。
 
 ### v200ai_cpufreq（外置，CPU 温控降频）
