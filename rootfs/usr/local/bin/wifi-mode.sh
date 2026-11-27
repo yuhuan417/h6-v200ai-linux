@@ -160,6 +160,7 @@ do_sta() {
 
 do_ap() {
 	need_root
+	sysctl -q -w net.ipv4.ip_forward=1
 	echo "→ 停止 STA 模式"
 	systemctl stop wpa_supplicant@wlan0 2>/dev/null
 	# 直接切接口类型，不依赖 wpa_supplicant 释放
@@ -175,13 +176,14 @@ interface=$IFACE
 driver=nl80211
 ctrl_interface=/run/hostapd
 ssid=$AP_SSID
+vendor_elements=dd0800a0400000020021
 hw_mode=a
 # 国家码：写进 ig 里才持久（直接改 /etc/hostapd/hostapd.conf 会被本脚本覆盖）
 # 注意：brcmfmac 把 phy 标成 self-managed(country 99)，regdb 对它的实际限制有限，
 #       但设了国家码后 beacon 里会带 Country IE，客户端选信道更规范。
 country_code=CN
 ieee80211d=1
-channel=36
+channel=149
 ieee80211n=1
 ieee80211ac=1
 # 带宽实测轨迹（iperf3，上行/下行 Mbps）：
@@ -191,7 +193,7 @@ ieee80211ac=1
 ht_capab=[HT40+][SHORT-GI-20][SHORT-GI-40]
 vht_oper_chwidth=1
 # ch36 + 80MHz 的中心信道 = 42 (5210 MHz)
-vht_oper_centr_freq_seg0_idx=42
+vht_oper_centr_freq_seg0_idx=155
 # 坑：不能加 [HTC-VHT]（驱动不支持）；不能加 [MAX-MPDU-11454]
 #（驱动只支持 3895，索引 0）⇒ 只留 SHORT-GI-80
 vht_capab=[SHORT-GI-80]

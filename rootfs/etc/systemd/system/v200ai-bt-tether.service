@@ -12,5 +12,6 @@ ExecStart=/usr/local/bin/bt-tether-agent.sh
 Restart=always
 RestartSec=10
 
-[Install]
-WantedBy=multi-user.target
+# 默认不启用：本单元只是保留「蓝牙 PAN 上行 + AP 守护」的能力。
+# 需要时手动 systemctl start v200ai-bt-tether（或 enable 后自行承担常驻守护）。
+# 不在 multi-user.target.wants 里创建符号链接，开机不会被拉起。

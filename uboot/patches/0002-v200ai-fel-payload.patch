@@ -1,0 +1,133 @@
+diff --git a/arch/arm/mach-sunxi/Kconfig b/arch/arm/mach-sunxi/Kconfig
+index dcdce4b17d..e1f412e492 100644
+--- a/arch/arm/mach-sunxi/Kconfig
++++ b/arch/arm/mach-sunxi/Kconfig
+@@ -1,5 +1,16 @@
+ if ARCH_SUNXI
+ 
++config V200AI_FEL_PAYLOAD
++	bool "V200-AI: FEL DRAM payload bridge"
++	depends on SPL && SPL_BOARD_INIT && MMC && MMC_WRITE && !H6_FEL_MMC_HOOK
++	help
++	  Publish the SPL's MMC helpers to a payload running in DRAM. The SPL
++	  only initialises DRAM; all eMMC read/write logic lives in the payload,
++	  so it is not limited by the 32 KiB SPL SRAM budget. The payload source
++	  and host driver live in tools/fel-emmc/ of the board repository.
++	  Debug and provisioning only: never enable this in a production
++	  bootloader.
++
+ config H6_FEL_MMC_HOOK
+ 	bool "V200-AI: FEL MMC 调试钩子"
+ 	depends on SPL && SPL_BOARD_INIT && MMC
+diff --git a/arch/arm/mach-sunxi/board.c b/arch/arm/mach-sunxi/board.c
+index a173fc2cc3..2bc3cadd91 100644
+--- a/arch/arm/mach-sunxi/board.c
++++ b/arch/arm/mach-sunxi/board.c
+@@ -229,6 +229,13 @@ extern ulong mmc_bread(struct blk_desc *block_dev, lbaint_t start,
+  *   0x400fffd8 出: SMHC2 RINT
+  */
+ #if IS_ENABLED(CONFIG_H6_FEL_MMC_HOOK)
++static u64 v200ai_mmc_blocks(void *mmc)
++{
++	struct mmc *m = mmc;
++
++	return m->capacity / (m->read_bl_len ? m->read_bl_len : 512);
++}
++
+ void spl_board_init(void)
+ {
+ 	u32 sect, cnt, dst, got = 0, lba = 0, used = 0xffffffff;
+@@ -394,6 +401,93 @@ void spl_board_init(void)
+ 	return_to_fel(fel_stash.sp, fel_stash.lr);
+ }
+ #endif /* CONFIG_H6_FEL_MMC_HOOK */
++#ifdef CONFIG_V200AI_FEL_PAYLOAD
++/*
++ * FEL <-> DRAM payload bridge.
++ *
++ * The SPL only initialises DRAM and publishes the MMC helpers it already
++ * links in; the actual eMMC read/write logic runs from DRAM so it is not
++ * limited by the 32 KiB SPL SRAM budget. Host side: tools/fel-emmc/.
++ *
++ * The payload header at V200AI_PAYLOAD_ADDR is: magic 'PLY1' at +0 and the
++ * entry offset at +4 (both written by the payload linker script), so the two
++ * sides never depend on a hard-coded function address.
++ */
++#define V200AI_API_ADDR		0x400ff000
++#define V200AI_PAR_ADDR		0x400fe000
++#define V200AI_PAYLOAD_ADDR	0x42000000
++#define V200AI_MAGIC_ADDR	0x400ffff0
++#define V200AI_MARKER_ADDR	0x400fffd0
++#define V200AI_MAGIC_PAYLOAD	0x5041594c	/* 'PAYL' */
++#define V200AI_MAGIC_ENTRY	0x504c5931	/* 'PLY1' */
++
++extern unsigned long get_timer(unsigned long base);
++extern int mmc_switch_part(struct mmc *mmc, unsigned int part_num);
++
++struct v200ai_fel_api {
++	u32 magic;
++	u32 version;
++	int (*mmc_init_all)(void *bis);
++	void *(*find_mmc)(int dev);
++	int (*mmc_init)(void *mmc);
++	void *(*blk_desc)(void *mmc);
++	u64 (*blk_read)(void *desc, u64 start, u64 cnt, void *dst);
++	u64 (*blk_write)(void *desc, u64 start, u64 cnt, const void *src);
++	int (*set_clock)(void *mmc, u32 clock, int disable);
++	int (*switch_part)(void *mmc, u32 part);
++	u64 (*timer)(u32 start);
++	u64 (*capacity)(void *mmc);
++	u32 ram_size;
++	u32 rsv;
++};
++
++static u64 v200ai_mmc_blocks(void *mmc)
++{
++	struct mmc *m = mmc;
++
++	return m->capacity / (m->read_bl_len ? m->read_bl_len : 512);
++}
++
++void spl_board_init(void)
++{
++	struct v200ai_fel_api api;
++	u32 *src = (u32 *)&api;
++	u32 *dst = (u32 *)V200AI_API_ADDR;
++	u32 entry;
++	unsigned int i;
++
++	memset(&api, 0, sizeof(api));
++	api.magic = 0x50415049;	/* 'PAPI' */
++	api.version = 1;
++	api.mmc_init_all = (void *)mmc_initialize;
++	api.find_mmc = (void *)find_mmc_device;
++	api.mmc_init = (void *)mmc_init;
++	api.blk_desc = (void *)mmc_get_blk_desc;
++	api.blk_read = (void *)blk_dread;
++	api.blk_write = (void *)blk_dwrite;
++	api.set_clock = (void *)mmc_set_clock;
++	api.switch_part = (void *)mmc_switch_part;
++	api.timer = (void *)get_timer;
++	api.capacity = (void *)v200ai_mmc_blocks;
++	api.ram_size = (u32)gd->ram_size;
++
++	for (i = 0; i < sizeof(api) / sizeof(u32); i++)
++		dst[i] = src[i];
++
++	entry = readl((void *)(V200AI_PAYLOAD_ADDR + 4));
++	if (readl((void *)V200AI_MAGIC_ADDR) == V200AI_MAGIC_PAYLOAD &&
++	    readl((void *)V200AI_PAYLOAD_ADDR) == V200AI_MAGIC_ENTRY &&
++	    entry >= 0x10 && entry < 0x4000) {
++		((void (*)(void *, void *))(V200AI_PAYLOAD_ADDR + entry))
++			((void *)V200AI_API_ADDR, (void *)V200AI_PAR_ADDR);
++		writel(0xaaaa1234, (void *)V200AI_MARKER_ADDR);
++	} else {
++		writel(0xbbbb1234, (void *)V200AI_MARKER_ADDR);
++	}
++
++	return_to_fel(fel_stash.sp, fel_stash.lr);
++}
++#endif /* CONFIG_V200AI_FEL_PAYLOAD */
+ 
+ static int spl_board_load_image(struct spl_image_info *spl_image,
+ 				struct spl_boot_device *bootdev)

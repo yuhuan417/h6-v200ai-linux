@@ -27,3 +27,12 @@ authorized_keys
 known_hosts
 wpa_supplicant*.conf
 !rootfs/etc/modprobe.d/*.conf
+
+# tools/fel-emmc build outputs (rebuild with make)
+tools/fel-emmc/payload.bin
+tools/fel-emmc/payload.elf
+tools/fel-emmc/spl/*.bin
+
+# 板级固件随仓库提供(见 firmware/README.md)
+!firmware/*.bin
+!firmware/*.hcd

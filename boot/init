@@ -46,7 +46,7 @@ if wait_node /dev/mmcblk1p1 && mount -t vfat -o ro /dev/mmcblk1p1 /mnt; then
     mounted=yes
 fi
 if [ -n "$mounted" ] && [ ! -f /mnt/noswitch ]; then
-    if wait_node /dev/mmcblk1p3 && mount -t ext4 -o rw /dev/mmcblk1p3 /rootfs; then
+    if wait_node /dev/mmcblk1p2 && mount -t ext4 -o rw /dev/mmcblk1p2 /rootfs; then
         if chroot /rootfs /bin/sh -c 'exit 0'; then
             umount /mnt
             mount -o move /dev /rootfs/dev

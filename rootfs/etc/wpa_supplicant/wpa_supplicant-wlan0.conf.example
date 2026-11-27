@@ -1,0 +1,8 @@
+# STA 模式模板：拷成 wpa_supplicant-wlan0.conf 后填入自己的网络。
+# 真实 SSID/PSK 属于私有凭据，不随仓库分发。
+ctrl_interface=/run/wpa_supplicant
+update_config=1
+network={
+	ssid="YOUR_SSID"
+	psk="YOUR_PSK"
+}

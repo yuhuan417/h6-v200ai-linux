@@ -10,7 +10,7 @@ Allwinner H6 / IT-LINK IT6335（BCM4335）主板的 Debian Linux 适配与维护
 | --- | --- |
 | SoC / RAM | Allwinner H6，4× Cortex-A53，1 GiB LPDDR3 |
 | 系统 | Debian 12 arm64，内核 `6.1.0-54-arm64` / `6.1.190-1` |
-| eMMC | 7.13 GiB，根分区 `/dev/mmcblk1p3`，原 sunxi-mmc 驱动 |
+| eMMC | 7.13 GiB，根分区 `/dev/mmcblk1p2`，原 sunxi-mmc 驱动 |
 | WiFi | brcmfmac，SDIO **50 MHz 单沿 / 4-bit / SD High Speed** |
 | AP | 5 GHz ch36 / VHT80，SSID `v200ai`，地址 `192.168.50.1` |
 | 蓝牙 | UART1，**1.5 Mbps / 8N2**；先在 115200 下载补丁，切速后等待 50 ms |
@@ -27,13 +27,13 @@ Allwinner H6 / IT-LINK IT6335（BCM4335）主板的 Debian Linux 适配与维护
 
 频率与温控是本板默认能力：`sun8i_thermal` 提供温区，`v200ai_cpufreq` 把 CPU 时钟注册成
 cooling device 接管 DTB 已有的阈值；因为 AXP805/806 供电未验证，只降频不调压，
-也不改 DTB 和 governor。见 [封版驱动依据](docs/drivers.md)。
+也不改 DTB 和 governor。约束见 [AGENTS.md](AGENTS.md) 的「必须保留」一节。
 
 WiFi 与蓝牙可以共存；**WiFi STA+AP 在当前固件/驱动组合下不可用**。
 SDR50 100 MHz 与 DDR50 50 MHz 冷启动均未通过，封版使用单沿 50 MHz。
 
 AP + 蓝牙上行可以同时工作：WiFi 只做热点，外网走 iPhone 的蓝牙 PAN（`bnep0`），
-AP 客户端由 NAT 共享这条链路。见 [维护与恢复](docs/maintenance.md)。
+AP 客户端由 NAT 共享这条链路。
 
 ## 使用
 
@@ -46,12 +46,11 @@ wifi-mode.sh boot-mode sta    # 开机首选模式；ap|sta 手工切换不改�
 bt-tether.sh                  # 建蓝牙 PAN 上行（需 /etc/v200ai-bt-tether.conf）
 ```
 
-开机首选模式记在 `/etc/v200ai-wifi-mode`，首选失败会回退另一种，见
-[维护与恢复](docs/maintenance.md)。
+开机首选模式记在 `/etc/v200ai-wifi-mode`，首选失败会回退另一种。
 
 源码快照中的 AP 密码 `v200ai1234` 是公开的开发默认值。部署到其他网络时设置自己的配置；
 STA 凭据、SSH 密钥、蓝牙配对记录和完整镜像均不在仓库中。
-当前 USB 串口为开发用途 root 自动登录，见 [维护与恢复](docs/maintenance.md)。
+当前 USB 串口为开发用途 root 自动登录。
 
 ## 仓库结构
 
@@ -64,10 +63,10 @@ STA 凭据、SSH 密钥、蓝牙配对记录和完整镜像均不在仓库中。
 | `uboot/` | 已有 U-Boot 适配补丁与使用的 defconfig；不重刷已工作的 bootloader |
 | `firmware/` | NVRAM、固件来源和校验清单；二进制由来源获取 |
 | `scripts/` | 主机端构建、静态检查和板上只读核验工具 |
-| `docs/` | 构建、维护、封版状态、已知限制 |
+| `docs/` | bootstrap 步骤（当前唯一的文档） |
 
-先读 [AGENTS.md](AGENTS.md)。构建见 [build.md](docs/build.md)，恢复见
-[maintenance.md](docs/maintenance.md)，驱动依据见 [drivers.md](docs/drivers.md)。
+先读 [AGENTS.md](AGENTS.md)。从零搭建、构建和刷写全部见
+[docs/bootstrap.md](docs/bootstrap.md)。
 本仓库没有自动刷机或自动重启入口。`rootfs/` 是文件快照，不是完整 Debian 根文件系统。
 
 ## 许可与来源

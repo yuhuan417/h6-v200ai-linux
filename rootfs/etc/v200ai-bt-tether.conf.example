@@ -1,0 +1,3 @@
+# 蓝牙 PAN 上行用的 iPhone 蓝牙地址，拷成 v200ai-bt-tether.conf 后填入。
+# 真实地址属于配对信息，不随仓库分发。
+BT_ADDR=XX:XX:XX:XX:XX:XX

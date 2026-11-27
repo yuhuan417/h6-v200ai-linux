@@ -7,9 +7,14 @@
 
 - 改变板上 eMMC 内容必须逐次获人类明确确认；确认前列出文件路径/SHA256、实测设备/偏移、
   耗时与风险、备份和回滚方法。一次确认只覆盖当次操作。用户明确指令优先。
-- 写前确认已有完整 `images/emmc-full.img`；写后 sync 并回读校验。
+- 写后 sync 并回读校验。
 - 重启、关机、断电由用户执行。读取板上状态和修改主机文件不需额外确认。
 - bootloader 位于 eMMC 用户区 8 KiB 偏移；不要写 boot0/boot1，不猜测主机 /dev/sdX。
+- 刷机通道硬规则：**禁止 `usbipd bind` / `usbipd attach` UMS 设备进 WSL**（USB 复位会
+  把 U-Boot gadget 打成描述符请求失败）。UMS 由 Windows 侧用 `wsl --mount --bare`
+  挂成块设备；被拒时改用 PowerShell 直写。流程见 [docs/bootstrap.md](docs/bootstrap.md) 的第 2、4 步。
+- 刷写用最小镜像（紧凑 ext4），避免为空白区写 eMMC；首次启动由 `v200ai-growroot.service` 跑 `resize2fs` 扩容。
+  `dd conv=sparse` 后必须跑 `fsck.fat -n` / `e2fsck -fn`，任一报错立即改全量 dd 重写。
 - 不因清理文档或重建仓库顺手改动设备驱动、供电、启动链或默认网络。
 
 ## 必须保留
@@ -22,7 +27,10 @@
   模块只降频不调压；不得为提频去掉上限或启用依赖 PMIC 的 DVFS。
 - Type-A USB 网卡保留 CDC-NCM 路径：不安装、不加载 r8152（其 cfgselector 会切到 vendor
   config 并初始化失败），只装 mii/usbnet/cdc_ether/cdc_ncm。
-- 保留启动载荷加载失败时的 UMS 回落与 initramfs klibc chroot 恢复路径；不使用 FAT 闩控制启动。
+- 保留启动载荷加载失败时的 UMS 回落与 initramfs klibc chroot 恢复路径。
+- 启动闩用 p1 上的 `guard.bin`：U-Boot 启动前 `fatwrite` 创建，Linux 启动成功后由
+  `v200ai-latch.service` 删除（`RequiresMountsFor=/boot/firmware`）；引导失败时闩保留，
+  下次上电直接 `ums 0 mmc 1`。`umshold.flag` 已废弃。
 - WiFi/BT 固件和 NVRAM 以 SHA256 为准；不要替换成名称相似的固件。
 
 ## 排查纪律
@@ -37,6 +45,8 @@
 
 ## 公开仓库
 
-只提交最终源码、配置、文档和维护工具。不提交镜像、二进制固件、编译产物、日志、密钥、
-网络凭据、配对信息或中间实验。默认 AP 开发密码已公开，不代表私人 STA 密码。
+只提交最终源码、配置、文档和维护工具。不提交镜像、编译产物、日志、密钥、网络凭据、
+配对信息或中间实验。板级固件是唯一例外：`firmware/` 下的 3 个 BCM4335 文件
+（`brcmfmac4335-sdio.bin`、`brcmfmac4335-sdio.txt`、`BCM4335A0.hcd`）随仓库提供，
+取值以 `firmware/README.md` 的 SHA256 为准。默认 AP 开发密码已公开，不代表私人 STA 密码。
 本地恢复材料在仓库外 `../h6-private/`，以及忽略的 `images/`；不得推送这些文件或旧私有历史。
