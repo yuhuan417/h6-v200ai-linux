@@ -37,6 +37,9 @@ cleanup() {
         mountpoint -q "$MNT/$d" && umount "$MNT/$d"
     done
     mountpoint -q "$MNT" && umount "$MNT"
+    mountpoint -q /usr/src && umount /usr/src
+    mountpoint -q /usr/lib/linux-kbuild-6.1 && umount /usr/lib/linux-kbuild-6.1
+    rmdir /usr/lib/linux-kbuild-6.1 2>/dev/null || true
 }
 trap cleanup EXIT
 
@@ -72,12 +75,25 @@ chroot "$MNT" env DEBIAN_FRONTEND=noninteractive \
 chroot "$MNT" env DEBIAN_FRONTEND=noninteractive \
     apt-get -y -q --no-install-recommends install $PKGS
 
+echo "== locale"
+# ssh forwards LANG/LC_* (Debian's client config sends LANG LC_*). With no
+# generated locale every login prints "setlocale: cannot change locale".
+# Keep the locales package: bookworm's postrm removes the generated
+# /usr/lib/locale data on purge (2.41 on the host does not), so purging leaves
+# the image without en_US.UTF-8 and the warning comes back.
+chroot "$MNT" env DEBIAN_FRONTEND=noninteractive \
+    apt-get -y -q --no-install-recommends install locales
+echo 'en_US.UTF-8 UTF-8' > "$MNT/etc/locale.gen"
+chroot "$MNT" locale-gen
+printf 'LANG=C.UTF-8\n' > "$MNT/etc/default/locale"
+
 echo "== overlay rootfs/"
 cp -a "$REPO/rootfs/." "$MNT/"
 rm -rf "$MNT/rootfs"
 chown -R 0:0 "$MNT/etc/modules-load.d" "$MNT/etc/modprobe.d" "$MNT/etc/systemd" \
     "$MNT/etc/hostapd" "$MNT/etc/dnsmasq.d" "$MNT/etc/network" \
-    "$MNT/etc/wpa_supplicant" "$MNT/etc/default" "$MNT/usr/local/bin"
+    "$MNT/etc/wpa_supplicant" "$MNT/etc/default" "$MNT/usr/local/bin" \
+    "$MNT/etc/v200ai-wifi-mode" "$MNT/etc/v200ai-bt-tether.conf.example"
 find "$MNT/usr/local/bin" -name '*.sh' -exec chmod 755 {} +
 find "$MNT/etc/systemd" "$MNT/etc/modprobe.d" "$MNT/etc/modules-load.d" \
     "$MNT/etc/hostapd" "$MNT/etc/dnsmasq.d" "$MNT/etc/network" \
@@ -124,6 +140,48 @@ if grep -qx 'linux-image-arm64' <(sed -e 's/#.*//' -e 's/[[:space:]]//g' "$REPO/
 fi
 MODS=$(ls "$MNT/lib/modules")
 [ "$MODS" = "6.1.0-54-arm64" ] || { echo "unexpected kernel ABI: $MODS" >&2; exit 1; }
+
+echo "== external modules"
+HDR=$REPO/build/kernel-headers
+rm -rf "$HDR"
+mkdir -p "$HDR"
+# chroot(1) chdirs to /, so cd inside the chroot rather than on the host.
+chroot "$MNT" /bin/sh -c 'cd /var/tmp && apt-get -y -q download \
+    linux-headers-6.1.0-54-arm64 linux-headers-6.1.0-54-common \
+    linux-kbuild-6.1 >/dev/null'
+for deb in "$MNT"/var/tmp/*.deb; do
+    dpkg-deb -x "$deb" "$HDR"
+done
+rm -f "$MNT"/var/tmp/*.deb
+# Debian's arm64 headers Makefile includes an absolute
+# /usr/src/linux-headers-<abi>-common/Makefile, so the extracted tree has to be
+# visible there. Bind-mount it for the build only; the host's own /usr/src is
+# hidden just for these minutes and nothing is written to it.
+mkdir -p /usr/src /usr/lib/linux-kbuild-6.1
+mount --bind "$HDR/usr/src" /usr/src
+mount --bind "$HDR/usr/lib/linux-kbuild-6.1" /usr/lib/linux-kbuild-6.1
+KERNEL_HEADERS=/usr/src/linux-headers-6.1.0-54-arm64 \
+    JOBS="${JOBS:-$(nproc)}" "$REPO/scripts/build-modules.sh"
+umount /usr/src
+umount /usr/lib/linux-kbuild-6.1
+rmdir /usr/lib/linux-kbuild-6.1 2>/dev/null || true
+
+MODDIR="$MNT/lib/modules/6.1.0-54-arm64"
+install -D -m 644 "$REPO/dist/modules/bluetooth/hci_uart.ko" \
+    "$MODDIR/kernel/drivers/bluetooth/hci_uart.ko"
+install -D -m 644 "$REPO/dist/modules/bluetooth/btbcm.ko" \
+    "$MODDIR/kernel/drivers/bluetooth/btbcm.ko"
+install -D -m 644 "$REPO/dist/modules/brcmfmac/brcmfmac.ko" \
+    "$MODDIR/kernel/drivers/net/wireless/broadcom/brcm80211/brcmfmac/brcmfmac.ko"
+install -D -m 644 "$REPO/dist/modules/cpufreq/v200ai_cpufreq.ko" \
+    "$MODDIR/extra/v200ai_cpufreq.ko"
+# Same layout as the sealed board: iommu and usb3 phy replace their upstream
+# locations, only the v200ai-specific cpufreq module goes to extra/.
+install -D -m 644 "$REPO/dist/modules/iommu/sun50i-iommu.ko" \
+    "$MODDIR/kernel/drivers/iommu/sun50i-iommu.ko"
+install -D -m 644 "$REPO/dist/modules/usb3/phy-sun50i-usb3.ko" \
+    "$MODDIR/kernel/drivers/phy/allwinner/phy-sun50i-usb3.ko"
+depmod -b "$MNT" 6.1.0-54-arm64
 
 echo "== clean"
 chroot "$MNT" env DEBIAN_FRONTEND=noninteractive apt-get -y -q clean

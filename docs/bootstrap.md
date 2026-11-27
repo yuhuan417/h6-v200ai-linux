@@ -276,9 +276,16 @@ sudo scripts/build-rootfs.sh -s 3072 -o dist/rootfs.img
 5. 安装 `firmware/` 三个 BCM4335 固件并建 `custom,h6-v200ai` 别名链接;
 6. 写 `fstab`(`root=…-02`、`/boot/firmware=…-01`),启用 `usbgadget`、`v200ai-ap`、
    `v200ai-bt-late`、`v200ai-growroot`、`v200ai-latch`、`serial-getty@ttyGS0`、`ssh`、
-   `networkd`、`bluetooth`;`v200ai-bt-tether` 只保留能力、不 enable;把
-   `hostapd`/`dnsmasq`/`wpa_supplicant` 这三个包自带的 unit 关掉(由 `wifi-mode.sh` 自己拉起);
-7. 清理 apt 缓存、清空 `machine-id`、`resize2fs -M`、`e2fsck -fn`。
+   `networkd`、`bluetooth`;`v200ai-bt-tether` 只保留能力、不 enable;
+   `hostapd`/`dnsmasq`/`wpa_supplicant` 三个 unit 只删开机自启链接(单元保留,运行时由
+   `wifi-mode.sh` 按模式启动,原因见 6.1.4);
+7. 生成 locale:`apt-get install locales` → 写 `/etc/locale.gen` → `locale-gen` →
+   写 `/etc/default/locale` 为 `LANG=C.UTF-8`。**保留 `locales` 包不要 purge**:
+   bookworm 的 postrm 在 purge 时会连 `/usr/lib/locale/` 下生成的数据一起删掉
+   (主机上的 2.41 版不会),purge 完警告会重新出现。不做这一步,ssh 转发
+   `LC_ALL=en_US.UTF-8` 时每次登录都会打 `setlocale: cannot change locale`;
+8. 构建并安装外置模块(见第 7 节),`depmod -a 6.1.0-54-arm64`;
+9. 清理 apt 缓存、清空 `machine-id`、`resize2fs -M`、`e2fsck -fn`。
 
 ## 4. 把镜像写进 p2
 
@@ -346,32 +353,83 @@ STA 凭据、没有蓝牙配对记录,ssh 需要自行放公钥或设密码。
 - NVRAM 里的 `macaddr=00:90:4c:c5:12:38` 是模板值,不生效,实际用 OTP 地址;
 - 自建模块未签名,内核带 O/E taint(未启用强制签名);
 - Cedrus 属 staging 驱动;部分 regulator 是 dummy provider,DT 声明不等于物理电压;
-- WiFi STA 与 AP 单独可用,**当前固件/驱动组合不支持 STA+AP 并发**。
+- WiFi STA 与 AP 单独可用,**当前固件/驱动组合不支持 STA+AP 并发**;
+- 红外接收不可用:DTS 里 `ir@7040000` 是 `status = "okay"`,但 Debian 未编
+  `CONFIG_IR_SUNXI`,本镜像也不外置该模块(已确认不需要红外遥控);
+- `CONFIG_SND_SUN4I_SPDIF` 未编,但 DTS 的 `spdif@5093000` 是 `status = "disabled"`,无影响。
 
 ## 6. 板级约束
 
-### 6.1 WiFi 与蓝牙的时序(不可更改)
+### 6.1 WiFi 与蓝牙的初始化时序(照好板复刻,改动前必须读完)
 
-BCM4335 是 combo:WL 与 BT 是两个 core,但共享 PMU/时钟请求。**BT 补丁下载的最后一步
-(把 BT core 从 RAM 启动)会把整颗芯片的 SDIO/backplane 一起重置**——SDIO 主机侧仍认为
-卡已初始化,卡侧状态已变。
+这一节是整个 bootstrap 里最反直觉的部分:**WiFi 与蓝牙不能并行,更不能先蓝牙**。
+好板上的顺序是被实测逼出来的,任何"优化"都会让 AP 起不来或蓝牙失效。
+
+#### 6.1.1 硬件事实
+
+BCM4335 是 combo:WL 与 BT 是两个 core,但共享 PMU 和时钟请求。BT 补丁(HCD)下载的
+最后一步是把 BT core 从 RAM 里启动,这一步会**把整颗芯片的 SDIO/backplane 一起重置**——
+SDIO 主机侧仍认为卡已初始化,卡侧状态已经变了。实测四种场景:
 
 | 场景 | 结果 |
 | --- | --- |
-| WL 固件已跑(AP 或关联)+ 下补丁 | WL 立即不应答(`-110`),hostapd 仍报 ENABLED |
-| 补丁后才 `modprobe brcmfmac` | `chip backplane type 15 is not supported`,probe `-19` |
-| 补丁后重绑 SDIO 再加载 WL | 仍 `backplane type 15`,多次重试都失败 |
-| WL 先成功 probe → 补丁 → 彻底重绑 | 恢复并长期稳定 |
+| WL 固件已跑(AP 或已关联)+ 下补丁 | WL 立即不应答(`-110`);hostapd 仍报 ENABLED、日志无 auth 帧 |
+| 补丁之后才 `modprobe brcmfmac` | `brcmf_chip_recognition: chip backplane type 15 is not supported`,probe `-19` |
+| 补丁之后重绑 SDIO 再加载 WL | 仍 `backplane type 15`,连试 5 次、跨 60 s 都失败 |
+| WL 先成功 probe → 补丁 → 彻底重绑 | 恢复并长期稳定(曾连续 980 s 无超时) |
 
-所以顺序是硬约束:**WiFi 先 attach → 再 `modprobe hci_uart` 下补丁 → 失联则 `sdio-reset`
-重绑 → 再起 AP**,由 `v200ai-bt-late.sh` + `v200ai-bt-late.service` 自动完成(开机约 +60 s)。
-不要把顺序改成"先 BT 后 WL"或"先 BT 后 AP":前者 probe 必失败,后者会打出成片
-`data error` 且 AP 起不来。
+结论:**能恢复的只有"驱动曾 attach 过 → 下补丁 → 彻底重绑"这一条路径**,也就是
+`v200ai-bt-late.sh` 做的事。
 
-配套配置:`blacklist btsdio`(它会绑 SDIO function 3 造幽灵 hci0,`hciconfig up` 会把 WiFi
-搞崩)、`blacklist hci_uart`(阻止自动探测)、`options hci_uart v200ai_speed=1500000`。
-蓝牙走 UART1(PG6–PG9),115200 下载补丁完成后切 1.5 Mbps、**等待 50 ms 再发后续 HCI 命令**,
-8N2,不要删这个等待。`cmac`、`jitterentropy_rng`、`drbg` 需提前加载(ECDH 自检与 BLE 安全配对)。
+#### 6.1.2 时间线(开机到 AP)
+
+| 时刻 | 事件 | 谁做的 | 判据 |
+| --- | --- | --- | --- |
+| T0 | brcmfmac 由 **udev** 按 modalias 自动加载(不是 `modules-load.d`),固件取 `brcmfmac4335-sdio.custom,h6-v200ai.bin` + `.txt`;SDIO 4-bit / SD-HS / 50 MHz | udev + 内核 | dmesg `brcmf_fw_alloc_request: using brcm/brcmfmac4335-sdio`、`Firmware: BCM4335/1 … 6.30.171.24.64` |
+| T0+约 60–72 s | `wlan0` 出现,phy 被标 self-managed(country 99) | 同上 | `ls /sys/class/net/wlan0` |
+| T1 | `usbgadget.service` 建 ACM+NCM,管理通道 `192.168.60.1` 先就绪(后续所有恢复的前提) | `After=systemd-modules-load local-fs` | `ip -4 addr show usb0` |
+| T2 | `v200ai-bt-late.service` → `v200ai-bt-late.sh` 等 `wlan0` | 脚本 | 日志 `brcmfmac 已 attach` |
+| T2 | 判活:`timeout 1 iw dev wlan0 info \| grep -E '^\s*channel [0-9]'` | 脚本 | 卡死时 `iw` 退出码仍是 0,**必须看输出内容** |
+| T2 | `modprobe hci_uart`(`v200ai_speed=1500000`):115200 下载 HCD,完成后切 1.5 Mbps 8N2 并**等 50 ms** | 内核 btbcm + 补丁 | dmesg `Patch` → `build 0353` |
+| T2 | `hciconfig hci0 up`,等 `UP RUNNING` | 脚本 | 日志 `hci0 已 UP RUNNING` |
+| T2 | 补丁后 WiFi 通常已失联 → `sdio-reset.sh` 重绑,再等 channel 行回来 | 脚本 | 日志 `重绑后控制通道已恢复` |
+| T3 | `v200ai-ap.service` → `v200ai-wifi-boot.sh` 等 `wlan0`,读 `/etc/v200ai-wifi-mode`(`ap`/`sta`,缺省 `ap`),首选失败回退另一种 | `After=v200ai-bt-late` | 日志 `[wifi-boot] ap ready` |
+| T3 | `wifi-mode.sh ap`:置 `ip_forward` → 停 STA → `ip link down` → `iw set type __ap` → 写 hostapd/dnsmasq 配置 → `hostapd -B` → 轮询 `hostapd_cli status` 到 `state=ENABLED` → 起 dnsmasq → 等 `192.168.50.1` | 脚本 | `ssid v200ai`、`channel 149 (5745 MHz), width: 80 MHz` |
+| T4 | `v200ai-bt-tether.service` 默认不启用,只保留"AP 守护 + iPhone PAN 重连"能力 | — | — |
+
+脚本里的等待上限都是设计值,不要随手改大改小:等 `wlan0` 30 s(bt-late)/120 s(wifi-boot)、
+等 `build 0353` 30 s、等 `hci0 UP RUNNING` 20 s、重绑后等 channel 5×1 s、判活单次超时 1 s。
+
+#### 6.1.3 五条不可更改的不变量
+
+1. **BT 不能在 WiFi attach 之前加载**:`/etc/modprobe.d/zz-bt-late.conf` 里 `blacklist hci_uart`,
+   由 bt-late 服务显式 `modprobe`;
+2. **brcmfmac 不能在 BT 补丁之后再 probe**:否则 `backplane type 15` / `-19`,只能整板断电;
+3. **AP 必须在 bt-late 之后启动**:`v200ai-ap.service` 的 `After=v200ai-bt-late`,否则补丁把 AP 打死;
+4. **ap 与 bt-late 不能互相 After**:只允许 bt-late 写 `Before=v200ai-ap`;互相依赖会成环,
+   启动自锁到 `TimeoutStartSec`;
+5. **`sdio-reset.sh` 是对 `4021000.mmc` 做 unbind/bind 重新触发 pwrseq**,不等于物理断电,
+   不能当冷启动验证。
+
+#### 6.1.4 其它必须保持的细节
+
+- `blacklist btsdio`:它会绑 SDIO function 3 造"幽灵 hci0",`hciconfig hci0 up` 会把 WiFi 搞崩;
+- `options hci_uart v200ai_speed=1500000`:保证下载前不提前切速;**切速后的 50 ms 等待不能删**;
+- `cmac`、`jitterentropy_rng`、`drbg` 必须早于 bluetooth 加载(ECDH p256 自检、BLE 安全配对);
+- WiFi 判活只看 `channel` 行——固件卡死时 `iw` 仍返回 0;
+- AP 模式下 dnsmasq 必须 `dhcp-host=<wlan0 自身 MAC>,ignore`,否则 networkd 会向自己的
+  dnsmasq 租地址、把 `192.168.50.1` 顶掉;
+- STA 模式重绑或从 AP 切过来后必须 `networkctl reconfigure wlan0`,networkd 不会自己重试 DHCP;
+- **这三个守护进程由 `wifi-mode.sh` 独占控制,不要 `enable`(不要开机自启)**,但它们在运行时
+  都要用,只是由脚本按当前模式按需启动:
+  - `dnsmasq`:AP 模式下脚本 `systemctl start --no-block dnsmasq`(单元保留,只是不 enable);
+  - `wpa_supplicant`:STA 模式下启动**模板实例** `wpa_supplicant@wlan0`(读
+    `/etc/wpa_supplicant/wpa_supplicant-wlan0.conf`),不是通用的 `wpa_supplicant.service`;
+  - `hostapd`:脚本直接 `hostapd -B /etc/hostapd/hostapd.conf` 启动进程,绕过单元。
+  为什么不能 enable:hostapd 开机启动时 wlan0 还没出现(要 60–72 s),STA 模式下还会和
+  wpa_supplicant 抢接口;dnsmasq 开机启动时 `/etc/dnsmasq.d/v200ai-ap.conf` 还没生成;
+  通用 `wpa_supplicant.service` 会和 `@wlan0` 实例抢同一张卡。
+  `build-rootfs.sh` 去掉的只是这三个 unit 的 `multi-user.target.wants` 链接,单元文件本身保留。
 
 ### 6.2 CPU 频率与温控
 
@@ -417,6 +475,42 @@ KERNEL_HEADERS=/path/to/linux-headers-6.1.0-54-arm64 scripts/build-modules.sh
 `roles`、`ulpi`、V4L2/videobuf2/mc、`jitterentropy_rng`、`drbg`、`cmac`、`autofs4`、
 `sun8i_thermal`、`mii`、`usbnet`、`cdc_ether`、`cdc_ncm`。**升级内核必须同步重建自建模块,
 不能只复制旧 ko。**
+
+### 7.0 安装位置(照封版板)
+
+`build-rootfs.sh` 在装完包之后自动构建并安装这五个模块,目标路径与封版板一致:
+
+| 产物 `dist/modules/…` | 安装到 `/lib/modules/6.1.0-54-arm64/` | 方式 |
+| --- | --- | --- |
+| `bluetooth/hci_uart.ko` | `kernel/drivers/bluetooth/hci_uart.ko` | 覆盖发包自带 |
+| `bluetooth/btbcm.ko` | `kernel/drivers/bluetooth/btbcm.ko` | 覆盖发包自带 |
+| `brcmfmac/brcmfmac.ko` | `kernel/drivers/net/wireless/broadcom/brcm80211/brcmfmac/brcmfmac.ko` | 覆盖 |
+| `iommu/sun50i-iommu.ko` | `kernel/drivers/iommu/sun50i-iommu.ko` | 新增(Debian 未编) |
+| `usb3/phy-sun50i-usb3.ko` | `kernel/drivers/phy/allwinner/phy-sun50i-usb3.ko` | 新增(Debian 未编) |
+| `cpufreq/v200ai_cpufreq.ko` | `extra/v200ai_cpufreq.ko` | 新增(自建) |
+
+装完必须 `depmod -a 6.1.0-54-arm64`,否则 `modules-load.d` 里的模块名解析不到。
+headers 只用于编译:脚本从 chroot 里 `apt-get download` 同版本 headers 解到
+`build/kernel-headers/`,不装进镜像,所以镜像不会因此变大。
+
+两个容易卡住的点(实测踩过):
+
+1. 除了 `linux-headers-6.1.0-54-arm64`、`linux-headers-6.1.0-54-common`,还需要
+   **`linux-kbuild-6.1`**——`scripts/basic/fixdep` 由它提供,缺了会报
+   `/bin/sh: 1: scripts/basic/fixdep: not found`;
+2. Debian 的 arm64 headers 里 `Makefile` 只有一行
+   `include /usr/src/linux-headers-6.1.0-54-common/Makefile`(绝对路径),所以解包出来的树
+   必须在 `/usr/src` 可见;而 common 包里的 `scripts` 是指向
+   `../../lib/linux-kbuild-6.1/scripts` 的相对符号链接,挂到 `/usr/src` 之后它会解析成
+   `/usr/lib/linux-kbuild-6.1/scripts`,所以**两个目录都要挂**:
+
+   ```sh
+   mount --bind build/kernel-headers/usr/src /usr/src
+   mount --bind build/kernel-headers/usr/lib/linux-kbuild-6.1 /usr/lib/linux-kbuild-6.1
+   KERNEL_HEADERS=/usr/src/linux-headers-6.1.0-54-arm64 scripts/build-modules.sh
+   ```
+
+   构建完立刻 umount,不往主机 `/usr/src`、`/usr/lib` 写任何文件。
 
 ### 7.1 v200ai_cpufreq
 
